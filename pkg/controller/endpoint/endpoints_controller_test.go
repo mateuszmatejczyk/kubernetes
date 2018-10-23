@@ -39,13 +39,15 @@ import (
 	endptspkg "k8s.io/kubernetes/pkg/api/v1/endpoints"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/controller"
+	"reflect"
 )
 
 var alwaysReady = func() bool { return true }
 var neverReady = func() bool { return false }
 var emptyNodeName string
-var triggerTime = time.Now()
+var triggerTime = time.Date(2018, 01, 01, 0, 0, 0, 0, time.UTC)
 var triggerTimeString = triggerTime.Format(time.RFC3339Nano)
+var oldTriggerTimeString = triggerTime.Add(-time.Hour).Format(time.RFC3339Nano)
 
 func addPods(store cache.Store, namespace string, nPods int, nPorts int, nNotReady int) {
 	for i := 0; i < nPods+nNotReady; i++ {
@@ -274,6 +276,9 @@ func TestSyncEndpointsProtocolTCP(t *testing.T) {
 			Name:            "foo",
 			Namespace:       ns,
 			ResourceVersion: "1",
+			Annotations: map[string]string {
+				v1.EndpointsLastChangeTriggerTime: oldTriggerTimeString,
+			},
 		},
 		Subsets: []v1.EndpointSubset{{
 			Addresses: []v1.EndpointAddress{{IP: "6.7.8.9", NodeName: &emptyNodeName}},
@@ -297,6 +302,7 @@ func TestSyncEndpointsProtocolTCP(t *testing.T) {
 			Namespace:       ns,
 			ResourceVersion: "1",
 			Annotations: map[string]string {
+				// It was oldTriggerTimeString, we expect the annotation to be updated.
 				v1.EndpointsLastChangeTriggerTime: triggerTimeString,
 			},
 		},
@@ -1225,3 +1231,117 @@ func TestDetermineNeededServiceUpdates(t *testing.T) {
 		}
 	}
 }
+
+func TestTriggerTime(t *testing.T) {
+	ns := "other"
+	testServer, _ := makeTestServer(t, ns)
+	defer testServer.Close()
+
+	key := "my-service"
+
+	t0 := triggerTime
+	t1 := t0.Add(time.Second)
+	t2 := t1.Add(time.Second)
+
+	testCases := []struct {
+		name  string
+		scenario func(controller *endpointController, key string)
+		expected *time.Time
+	}{
+		{
+			name:  "Nothing enqueued",
+			scenario: func(controller *endpointController, key string) {},
+			expected: nil,
+		},
+		{
+			name:  "Single batch, one event",
+			scenario: func(controller *endpointController, key string) {
+				controller.enqueue(key, t1)
+			},
+			expected: &t1,
+		},
+		{
+			name:  "Single batch, two events",
+			scenario: func(controller *endpointController, key string) {
+				controller.enqueue(key, t0)
+				controller.enqueue(key, t1)
+			},
+			expected: &t0,
+		},
+		{
+			name:  "Two batches, one event per batch",
+			scenario: func(controller *endpointController, key string) {
+				controller.enqueue(key, t0)
+
+				// Get() is no op here, but matters in the real world as it will remove the key from the
+				// queue. We use it together with Done() to mark the beginning and end of batch processing.
+				controller.queue.Get()
+				// Nothing between Get() and getAndResetTriggerTime()
+				controller.getAndResetTriggerTime(key)
+				controller.queue.Done(key)
+
+				controller.enqueue(key, t1)
+				controller.queue.Get()
+			},
+			expected: &t1,
+		},
+		{
+			name:  "Two batches, event between Get() and getAndResetTriggerTime()",
+			scenario: func(controller *endpointController, key string) {
+				controller.enqueue(key, t0)
+
+				controller.queue.Get()
+				controller.enqueue(key, t1)
+				controller.getAndResetTriggerTime(key)
+				controller.queue.Done(key)
+
+				controller.queue.Get()
+				// The next getAndRestTriggerTime(key) should return t1.
+			},
+			expected: &t1,
+		},
+		{
+			name:  "Two batches, two events between Get() and getAndResetTriggerTime()",
+			scenario: func(controller *endpointController, key string) {
+				controller.enqueue(key, t0)
+
+				controller.queue.Get()
+				// This is the worst scenario. Instead of returning t1 the code will
+				// return t1. We neglect that as scenario is highly improbable.
+				controller.enqueue(key, t1)
+				controller.enqueue(key, t2)
+				controller.getAndResetTriggerTime(key)
+				controller.queue.Done(key)
+
+				controller.queue.Get()
+			},
+			expected: &t2,
+		},
+		{
+			name:  "Two batches, two events in second batch",
+			scenario: func(controller *endpointController, key string) {
+				controller.enqueue(key, t0)
+
+				controller.queue.Get()
+				controller.getAndResetTriggerTime(key)
+				controller.queue.Done(key)
+
+				controller.enqueue(key, t1)
+				controller.enqueue(key, t2)
+				controller.queue.Get()
+			},
+			expected: &t1,
+		},
+	}
+
+	for _, testCase := range testCases {
+		controller := newController(testServer.URL)
+
+		testCase.scenario(controller, key)
+		if got := controller.getAndResetTriggerTime(key); !reflect.DeepEqual(got, testCase.expected) {
+			t.Errorf("%s: Wrong trigger time, expected %s, got %s", testCase.name, testCase.expected , got)
+		}
+	}
+}
+
+// TODO(mmat): Annotation is updated.

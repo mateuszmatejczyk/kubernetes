@@ -149,7 +149,7 @@ type EndpointController struct {
 	minTriggerTime map[string]time.Time
 	maxTriggerTime map[string]time.Time
 	// Mutex guarding the minTriggerTime and maxTriggerTime maps.
-	endpointsNameToTriggerTimeMutex sync.Mutex
+	triggerTimeMutex sync.Mutex
 }
 
 // Run will not return until stopCh is closed. workers determines how many
@@ -228,8 +228,8 @@ func getPodLastTransitionTime(pod *v1.Pod) (lastTransitionTime time.Time) {
 
 // TODO(mmat): Move somewhere and document
 func (e *EndpointController) enqueue(key string, triggerTime time.Time) {
-	e.endpointsNameToTriggerTimeMutex.Lock()
-	defer e.endpointsNameToTriggerTimeMutex.Unlock()
+	e.triggerTimeMutex.Lock()
+	defer e.triggerTimeMutex.Unlock()
 
 	minTriggerTime, ok := e.minTriggerTime[key]
 	if !ok || triggerTime.Before(minTriggerTime) {
@@ -413,7 +413,7 @@ func (e *EndpointController) worker() {
 //     queue = [S], lastTriggerTime = {S -> T1 (=min(T1,T2)}
 // T6: worker resets lastTriggerTime:
 //     queue = [S], lastTriggerTime = {}
-// T7: worker processes S from T4, writes ip tables, and exports T7-T1 as NetworkProgrammingLatency.
+// T7: worker processes S from T4 and updates the endpoints object with T1 as LastTriggerChangeTime.
 // T8: worker picks up S from the queue, but there is nothing in lastTriggerTime, cannot export
 //     NetworkProgrammingLatency.
 
@@ -428,19 +428,25 @@ func (e *EndpointController) worker() {
 //     queue = [S], minTriggerTime = {S -> T1}, maxTriggerTime = {S -> T2}
 // T6: worker resets lastTriggerTime:
 //     queue = [S], minTriggerTime = {}, maxTriggerTime = {S -> T2}
-// T7: worker processes S from T4, writes ip tables, and exports T7-T0 as NetworkProgrammingLatency.
+// T7: worker processes S from T4 and updates the endpoints object with T2 as LastTriggerChangeTime.
 // T8: worker picks up S from the queue and processes it, there is nothing in minTriggerTime, so
 //     it fall backs to maxTriggerTime and will correctly export NetworkProgrammingLatency as T9-T2
+
+// Note that this is not ideal, if between T4 and T6 two Pod changes were observed, with trigger
+// times T2 and T3, by definition we should export T2, but we will export T3. But because such
+// edge case are rare, and because T3-T2 should be approximately limited by the batching period in
+// this controller, we neglect this problem.
+
 func (e *EndpointController) getAndResetTriggerTime(key string) *time.Time {
-	e.endpointsNameToTriggerTimeMutex.Lock()
-	defer e.endpointsNameToTriggerTimeMutex.Unlock()
+	e.triggerTimeMutex.Lock()
+	defer e.triggerTimeMutex.Unlock()
 
 	triggerTime, ok := e.minTriggerTime[key]
 	if ok {
 		delete(e.minTriggerTime, key)
 		return &triggerTime
 	}
-	// If min it's not set it might be the race condition explained in the documention. Try in max
+	// If min it's not set it might be the race condition explained in the documentation. Try in max
 	// map.
 	triggerTime, ok = e.maxTriggerTime[key]
 	if ok {
