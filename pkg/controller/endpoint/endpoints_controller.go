@@ -43,6 +43,7 @@ import (
 	"k8s.io/kubernetes/pkg/util/metrics"
 
 	"github.com/golang/glog"
+	"sync"
 )
 
 const (
@@ -101,6 +102,8 @@ func NewEndpointController(podInformer coreinformers.PodInformer, serviceInforme
 	e.endpointsLister = endpointsInformer.Lister()
 	e.endpointsSynced = endpointsInformer.Informer().HasSynced
 
+	e.endpointsNameToTriggerTime = make(map[string]time.Time)
+
 	return e
 }
 
@@ -138,6 +141,11 @@ type EndpointController struct {
 
 	// workerLoopPeriod is the time between worker runs. The workers process the queue of service and pod changes.
 	workerLoopPeriod time.Duration
+
+	// TODO(mmat@google.com): Document these two fields.
+	endpointsNameToTriggerTime map[string]time.Time
+	// Mutex guarding the endpointsNameToTriggerTime map.
+	endpointsNameToTriggerTimeMutex sync.Mutex
 }
 
 // Run will not return until stopCh is closed. workers determines how many
@@ -187,14 +195,45 @@ func (e *EndpointController) getPodServiceMemberships(pod *v1.Pod) (sets.String,
 // enqueue them. obj must have *v1.Pod type.
 func (e *EndpointController) addPod(obj interface{}) {
 	pod := obj.(*v1.Pod)
+
 	services, err := e.getPodServiceMemberships(pod)
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("Unable to get pod %s/%s's service memberships: %v", pod.Namespace, pod.Name, err))
 		return
 	}
+
+	triggerTime := getPodLastTransitionTime(pod)
 	for key := range services {
-		e.queue.Add(key)
+		e.enqueue(key, triggerTime)
 	}
+}
+
+func getPodLastTransitionTime(pod *v1.Pod) (lastTransitionTime time.Time) {
+	for _, condition := range pod.Status.Conditions {
+		// TODO(mmat@google.com): Does it make sense?
+		if condition.Status == v1.ConditionTrue {
+			val := condition.LastProbeTime.Time
+			if lastTransitionTime.Before(val) {
+				lastTransitionTime = val
+			}
+		}
+	}
+	// TODO(mmat@google.com): Is it possible that lastTransitionTime won't be set?
+	return lastTransitionTime
+}
+
+// TODO(mmat): Move somewhere
+func (e *EndpointController) enqueue(key string, triggerTime time.Time) {
+	e.endpointsNameToTriggerTimeMutex.Lock()
+	defer e.endpointsNameToTriggerTimeMutex.Unlock()
+
+	storedTriggerTime, ok := e.endpointsNameToTriggerTime[key]
+	if ok && triggerTime.Before(storedTriggerTime) {
+		// Use oldest trigger time.
+		triggerTime = storedTriggerTime
+	}
+	e.endpointsNameToTriggerTime[key] = triggerTime
+	e.queue.Add(key)
 }
 
 func podToEndpointAddress(pod *v1.Pod) *v1.EndpointAddress {
@@ -293,8 +332,9 @@ func (e *EndpointController) updatePod(old, cur interface{}) {
 		services = determineNeededServiceUpdates(oldServices, services, podChangedFlag)
 	}
 
+	triggerTime := getPodLastTransitionTime(newPod)
 	for key := range services {
-		e.queue.Add(key)
+		e.enqueue(key, triggerTime)
 	}
 }
 
@@ -354,8 +394,15 @@ func (e *EndpointController) processNextWorkItem() bool {
 		return false
 	}
 	defer e.queue.Done(eKey)
+	e.endpointsNameToTriggerTimeMutex.Lock()
+	// TODO(mmat@google.com): What if the same key was added between e.queue.Get() and mutex.Lock()?
+	// Should we add another map that would hold elements that were removed?
+	key := eKey.(string)
+	triggerTime := e.endpointsNameToTriggerTime[key]
+	delete(e.endpointsNameToTriggerTime, key)
+	e.endpointsNameToTriggerTimeMutex.Unlock()
 
-	err := e.syncService(eKey.(string))
+	err := e.syncService(key, triggerTime)
 	e.handleErr(err, eKey)
 
 	return true
@@ -378,7 +425,7 @@ func (e *EndpointController) handleErr(err error, key interface{}) {
 	utilruntime.HandleError(err)
 }
 
-func (e *EndpointController) syncService(key string) error {
+func (e *EndpointController) syncService(key string, triggerTime time.Time) error {
 	startTime := time.Now()
 	defer func() {
 		glog.V(4).Infof("Finished syncing service %q endpoints. (%v)", key, time.Since(startTime))
@@ -505,6 +552,7 @@ func (e *EndpointController) syncService(key string) error {
 	if newEndpoints.Annotations == nil {
 		newEndpoints.Annotations = make(map[string]string)
 	}
+	newEndpoints.Annotations[v1.EndpointsLastChangeTriggerTime] = triggerTime.Format(time.RFC3339Nano)
 
 	glog.V(4).Infof("Update endpoints for %v/%v, ready: %d not ready: %d", service.Namespace, service.Name, totalReadyEps, totalNotReadyEps)
 	if createEndpoints {

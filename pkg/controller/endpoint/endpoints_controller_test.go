@@ -44,6 +44,8 @@ import (
 var alwaysReady = func() bool { return true }
 var neverReady = func() bool { return false }
 var emptyNodeName string
+var triggerTime = time.Now()
+var triggerTimeString = triggerTime.Format(time.RFC3339Nano)
 
 func addPods(store cache.Store, namespace string, nPods int, nPorts int, nNotReady int) {
 	for i := 0; i < nPods+nNotReady; i++ {
@@ -168,7 +170,7 @@ func TestSyncEndpointsItemsPreserveNoSelector(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: ns},
 		Spec:       v1.ServiceSpec{Ports: []v1.ServicePort{{Port: 80}}},
 	})
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 	endpointsHandler.ValidateRequestCount(t, 0)
 }
 
@@ -192,7 +194,7 @@ func TestSyncEndpointsExistingNilSubsets(t *testing.T) {
 			Ports:    []v1.ServicePort{{Port: 80}},
 		},
 	})
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 	endpointsHandler.ValidateRequestCount(t, 0)
 }
 
@@ -216,7 +218,7 @@ func TestSyncEndpointsExistingEmptySubsets(t *testing.T) {
 			Ports:    []v1.ServicePort{{Port: 80}},
 		},
 	})
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 	endpointsHandler.ValidateRequestCount(t, 0)
 }
 
@@ -232,7 +234,7 @@ func TestSyncEndpointsNewNoSubsets(t *testing.T) {
 			Ports:    []v1.ServicePort{{Port: 80}},
 		},
 	})
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 	endpointsHandler.ValidateRequestCount(t, 1)
 }
 
@@ -286,7 +288,7 @@ func TestSyncEndpointsProtocolTCP(t *testing.T) {
 			Ports:    []v1.ServicePort{{Port: 80, TargetPort: intstr.FromInt(8080), Protocol: "TCP"}},
 		},
 	})
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 
 	endpointsHandler.ValidateRequestCount(t, 1)
 	data := runtime.EncodeOrDie(testapi.Default.Codec(), &v1.Endpoints{
@@ -294,6 +296,9 @@ func TestSyncEndpointsProtocolTCP(t *testing.T) {
 			Name:            "foo",
 			Namespace:       ns,
 			ResourceVersion: "1",
+			Annotations: map[string]string {
+				v1.EndpointsLastChangeTriggerTime: triggerTimeString,
+			},
 		},
 		Subsets: []v1.EndpointSubset{{
 			Addresses: []v1.EndpointAddress{{IP: "1.2.3.4", NodeName: &emptyNodeName, TargetRef: &v1.ObjectReference{Kind: "Pod", Name: "pod0", Namespace: ns}}},
@@ -327,7 +332,7 @@ func TestSyncEndpointsProtocolUDP(t *testing.T) {
 			Ports:    []v1.ServicePort{{Port: 80, TargetPort: intstr.FromInt(8080), Protocol: "UDP"}},
 		},
 	})
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 
 	endpointsHandler.ValidateRequestCount(t, 1)
 	data := runtime.EncodeOrDie(testapi.Default.Codec(), &v1.Endpoints{
@@ -335,6 +340,9 @@ func TestSyncEndpointsProtocolUDP(t *testing.T) {
 			Name:            "foo",
 			Namespace:       ns,
 			ResourceVersion: "1",
+			Annotations: map[string]string {
+				v1.EndpointsLastChangeTriggerTime: triggerTimeString,
+			},
 		},
 		Subsets: []v1.EndpointSubset{{
 			Addresses: []v1.EndpointAddress{{IP: "1.2.3.4", NodeName: &emptyNodeName, TargetRef: &v1.ObjectReference{Kind: "Pod", Name: "pod0", Namespace: ns}}},
@@ -368,7 +376,7 @@ func TestSyncEndpointsProtocolSCTP(t *testing.T) {
 			Ports:    []v1.ServicePort{{Port: 80, TargetPort: intstr.FromInt(8080), Protocol: "SCTP"}},
 		},
 	})
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 
 	endpointsHandler.ValidateRequestCount(t, 1)
 	data := runtime.EncodeOrDie(testapi.Default.Codec(), &v1.Endpoints{
@@ -376,6 +384,9 @@ func TestSyncEndpointsProtocolSCTP(t *testing.T) {
 			Name:            "foo",
 			Namespace:       ns,
 			ResourceVersion: "1",
+			Annotations: map[string]string {
+				v1.EndpointsLastChangeTriggerTime: triggerTimeString,
+			},
 		},
 		Subsets: []v1.EndpointSubset{{
 			Addresses: []v1.EndpointAddress{{IP: "1.2.3.4", NodeName: &emptyNodeName, TargetRef: &v1.ObjectReference{Kind: "Pod", Name: "pod0", Namespace: ns}}},
@@ -406,13 +417,16 @@ func TestSyncEndpointsItemsEmptySelectorSelectsAll(t *testing.T) {
 			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
 		},
 	})
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 
 	data := runtime.EncodeOrDie(testapi.Default.Codec(), &v1.Endpoints{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            "foo",
 			Namespace:       ns,
 			ResourceVersion: "1",
+			Annotations: map[string]string {
+				v1.EndpointsLastChangeTriggerTime: triggerTimeString,
+			},
 		},
 		Subsets: []v1.EndpointSubset{{
 			Addresses: []v1.EndpointAddress{{IP: "1.2.3.4", NodeName: &emptyNodeName, TargetRef: &v1.ObjectReference{Kind: "Pod", Name: "pod0", Namespace: ns}}},
@@ -443,13 +457,16 @@ func TestSyncEndpointsItemsEmptySelectorSelectsAllNotReady(t *testing.T) {
 			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
 		},
 	})
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 
 	data := runtime.EncodeOrDie(testapi.Default.Codec(), &v1.Endpoints{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            "foo",
 			Namespace:       ns,
 			ResourceVersion: "1",
+			Annotations: map[string]string {
+				v1.EndpointsLastChangeTriggerTime: triggerTimeString,
+			},
 		},
 		Subsets: []v1.EndpointSubset{{
 			NotReadyAddresses: []v1.EndpointAddress{{IP: "1.2.3.4", NodeName: &emptyNodeName, TargetRef: &v1.ObjectReference{Kind: "Pod", Name: "pod0", Namespace: ns}}},
@@ -480,13 +497,16 @@ func TestSyncEndpointsItemsEmptySelectorSelectsAllMixed(t *testing.T) {
 			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
 		},
 	})
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 
 	data := runtime.EncodeOrDie(testapi.Default.Codec(), &v1.Endpoints{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            "foo",
 			Namespace:       ns,
 			ResourceVersion: "1",
+			Annotations: map[string]string {
+				v1.EndpointsLastChangeTriggerTime: triggerTimeString,
+			},
 		},
 		Subsets: []v1.EndpointSubset{{
 			Addresses:         []v1.EndpointAddress{{IP: "1.2.3.4", NodeName: &emptyNodeName, TargetRef: &v1.ObjectReference{Kind: "Pod", Name: "pod0", Namespace: ns}}},
@@ -521,13 +541,16 @@ func TestSyncEndpointsItemsPreexisting(t *testing.T) {
 			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
 		},
 	})
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 
 	data := runtime.EncodeOrDie(testapi.Default.Codec(), &v1.Endpoints{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            "foo",
 			Namespace:       ns,
 			ResourceVersion: "1",
+			Annotations: map[string]string {
+				v1.EndpointsLastChangeTriggerTime: triggerTimeString,
+			},
 		},
 		Subsets: []v1.EndpointSubset{{
 			Addresses: []v1.EndpointAddress{{IP: "1.2.3.4", NodeName: &emptyNodeName, TargetRef: &v1.ObjectReference{Kind: "Pod", Name: "pod0", Namespace: ns}}},
@@ -561,7 +584,7 @@ func TestSyncEndpointsItemsPreexistingIdentical(t *testing.T) {
 			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
 		},
 	})
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 	endpointsHandler.ValidateRequestCount(t, 0)
 }
 
@@ -582,7 +605,7 @@ func TestSyncEndpointsItems(t *testing.T) {
 			},
 		},
 	})
-	endpoints.syncService("other/foo")
+	endpoints.syncService("other/foo", triggerTime)
 
 	expectedSubsets := []v1.EndpointSubset{{
 		Addresses: []v1.EndpointAddress{
@@ -599,6 +622,9 @@ func TestSyncEndpointsItems(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			ResourceVersion: "",
 			Name:            "foo",
+			Annotations: map[string]string {
+				v1.EndpointsLastChangeTriggerTime: triggerTimeString,
+			},
 		},
 		Subsets: endptspkg.SortSubsets(expectedSubsets),
 	})
@@ -627,7 +653,7 @@ func TestSyncEndpointsItemsWithLabels(t *testing.T) {
 			},
 		},
 	})
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 
 	expectedSubsets := []v1.EndpointSubset{{
 		Addresses: []v1.EndpointAddress{
@@ -645,6 +671,9 @@ func TestSyncEndpointsItemsWithLabels(t *testing.T) {
 			ResourceVersion: "",
 			Name:            "foo",
 			Labels:          serviceLabels,
+			Annotations: map[string]string {
+				v1.EndpointsLastChangeTriggerTime: triggerTimeString,
+			},
 		},
 		Subsets: endptspkg.SortSubsets(expectedSubsets),
 	})
@@ -684,13 +713,16 @@ func TestSyncEndpointsItemsPreexistingLabelsChange(t *testing.T) {
 			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
 		},
 	})
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 
 	data := runtime.EncodeOrDie(testapi.Default.Codec(), &v1.Endpoints{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            "foo",
 			Namespace:       ns,
 			ResourceVersion: "1",
+			Annotations: map[string]string {
+				v1.EndpointsLastChangeTriggerTime: triggerTimeString,
+			},
 			Labels:          serviceLabels,
 		},
 		Subsets: []v1.EndpointSubset{{
@@ -780,12 +812,15 @@ func TestSyncEndpointsHeadlessService(t *testing.T) {
 			Ports:     []v1.ServicePort{},
 		},
 	})
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 	data := runtime.EncodeOrDie(testapi.Default.Codec(), &v1.Endpoints{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            "foo",
 			Namespace:       ns,
 			ResourceVersion: "1",
+			Annotations: map[string]string {
+				v1.EndpointsLastChangeTriggerTime: triggerTimeString,
+			},
 		},
 		Subsets: []v1.EndpointSubset{{
 			Addresses: []v1.EndpointAddress{{IP: "1.2.3.4", NodeName: &emptyNodeName, TargetRef: &v1.ObjectReference{Kind: "Pod", Name: "pod0", Namespace: ns}}},
@@ -820,12 +855,15 @@ func TestSyncEndpointsItemsExcludeNotReadyPodsWithRestartPolicyNeverAndPhaseFail
 			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
 		},
 	})
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 	data := runtime.EncodeOrDie(testapi.Default.Codec(), &v1.Endpoints{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            "foo",
 			Namespace:       ns,
 			ResourceVersion: "1",
+			Annotations: map[string]string {
+				v1.EndpointsLastChangeTriggerTime: triggerTimeString,
+			},
 		},
 		Subsets: []v1.EndpointSubset{},
 	})
@@ -856,12 +894,15 @@ func TestSyncEndpointsItemsExcludeNotReadyPodsWithRestartPolicyNeverAndPhaseSucc
 			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
 		},
 	})
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 	data := runtime.EncodeOrDie(testapi.Default.Codec(), &v1.Endpoints{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            "foo",
 			Namespace:       ns,
 			ResourceVersion: "1",
+			Annotations: map[string]string {
+				v1.EndpointsLastChangeTriggerTime: triggerTimeString,
+			},
 		},
 		Subsets: []v1.EndpointSubset{},
 	})
@@ -892,12 +933,15 @@ func TestSyncEndpointsItemsExcludeNotReadyPodsWithRestartPolicyOnFailureAndPhase
 			Ports:    []v1.ServicePort{{Port: 80, Protocol: "TCP", TargetPort: intstr.FromInt(8080)}},
 		},
 	})
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 	data := runtime.EncodeOrDie(testapi.Default.Codec(), &v1.Endpoints{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            "foo",
 			Namespace:       ns,
 			ResourceVersion: "1",
+			Annotations: map[string]string {
+				v1.EndpointsLastChangeTriggerTime: triggerTimeString,
+			},
 		},
 		Subsets: []v1.EndpointSubset{},
 	})
@@ -910,7 +954,10 @@ func TestSyncEndpointsHeadlessWithoutPort(t *testing.T) {
 	defer testServer.Close()
 	endpoints := newController(testServer.URL)
 	endpoints.serviceStore.Add(&v1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: "foo", Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "foo",
+			Namespace: ns,
+		},
 		Spec: v1.ServiceSpec{
 			Selector:  map[string]string{"foo": "bar"},
 			ClusterIP: "None",
@@ -918,11 +965,14 @@ func TestSyncEndpointsHeadlessWithoutPort(t *testing.T) {
 		},
 	})
 	addPods(endpoints.podStore, ns, 1, 1, 0)
-	endpoints.syncService(ns + "/foo")
+	endpoints.syncService(ns + "/foo", triggerTime)
 	endpointsHandler.ValidateRequestCount(t, 1)
 	data := runtime.EncodeOrDie(testapi.Default.Codec(), &v1.Endpoints{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "foo",
+			Annotations: map[string]string {
+				v1.EndpointsLastChangeTriggerTime: triggerTimeString,
+			},
 		},
 		Subsets: []v1.EndpointSubset{{
 			Addresses: []v1.EndpointAddress{{IP: "1.2.3.4", NodeName: &emptyNodeName, TargetRef: &v1.ObjectReference{Kind: "Pod", Name: "pod0", Namespace: ns}}},
