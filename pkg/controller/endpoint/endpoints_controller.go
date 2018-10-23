@@ -102,7 +102,8 @@ func NewEndpointController(podInformer coreinformers.PodInformer, serviceInforme
 	e.endpointsLister = endpointsInformer.Lister()
 	e.endpointsSynced = endpointsInformer.Informer().HasSynced
 
-	e.endpointsNameToTriggerTime = make(map[string]time.Time)
+	e.minTriggerTime = make(map[string]time.Time)
+	e.maxTriggerTime = make(map[string]time.Time)
 
 	return e
 }
@@ -143,8 +144,11 @@ type EndpointController struct {
 	workerLoopPeriod time.Duration
 
 	// TODO(mmat@google.com): Document these two fields.
-	endpointsNameToTriggerTime map[string]time.Time
-	// Mutex guarding the endpointsNameToTriggerTime map.
+	// Fields below are used to compute the In-Cluster Network Programming Latency SLI. See TODO
+	// for more details.
+	minTriggerTime map[string]time.Time
+	maxTriggerTime map[string]time.Time
+	// Mutex guarding the minTriggerTime and maxTriggerTime maps.
 	endpointsNameToTriggerTimeMutex sync.Mutex
 }
 
@@ -222,17 +226,22 @@ func getPodLastTransitionTime(pod *v1.Pod) (lastTransitionTime time.Time) {
 	return lastTransitionTime
 }
 
-// TODO(mmat): Move somewhere
+// TODO(mmat): Move somewhere and document
 func (e *EndpointController) enqueue(key string, triggerTime time.Time) {
 	e.endpointsNameToTriggerTimeMutex.Lock()
 	defer e.endpointsNameToTriggerTimeMutex.Unlock()
 
-	storedTriggerTime, ok := e.endpointsNameToTriggerTime[key]
-	if ok && triggerTime.Before(storedTriggerTime) {
-		// Use oldest trigger time.
-		triggerTime = storedTriggerTime
+	minTriggerTime, ok := e.minTriggerTime[key]
+	if !ok || triggerTime.Before(minTriggerTime) {
+		minTriggerTime = triggerTime
 	}
-	e.endpointsNameToTriggerTime[key] = triggerTime
+	maxTriggerTime, ok := e.maxTriggerTime[key]
+	if !ok || triggerTime.After(maxTriggerTime) {
+		maxTriggerTime = triggerTime
+	}
+
+	e.minTriggerTime[key] = minTriggerTime
+	e.maxTriggerTime[key] = maxTriggerTime
 	e.queue.Add(key)
 }
 
@@ -388,21 +397,70 @@ func (e *EndpointController) worker() {
 	}
 }
 
+// TODO(mmat): Document better and move somewhere
+// Returns nil if triggerTime not set for given key...
+
+// The purpose of the main and previous map is to ...
+// Imagine if there was no previous map, consider following situation
+// T0: queue = [], lastTriggerTime = {}
+// T1: Pod P1, belonging to service S, changes
+// T2: Pod P2, belonging to service S, changes
+// T3: endpoints_controller observes pod P1 change:
+//     queue = [S], lastTriggerTime = {S -> T1}
+// T4: worker picks up S from the queue:
+//     queue = [], lastTriggerTime = {S -> T1}
+// T5: endpoints_controller observes pod P2 change:
+//     queue = [S], lastTriggerTime = {S -> T1 (=min(T1,T2)}
+// T6: worker resets lastTriggerTime:
+//     queue = [S], lastTriggerTime = {}
+// T7: worker processes S from T4, writes ip tables, and exports T7-T1 as NetworkProgrammingLatency.
+// T8: worker picks up S from the queue, but there is nothing in lastTriggerTime, cannot export
+//     NetworkProgrammingLatency.
+
+// T0: queue = [], minTriggerTime = {}, maxTriggerTime = {}
+// T1: Pod P1, belonging to service S, changes
+// T2: Pod P2, belonging to service S, changes
+// T3: endpoints_controller observes pod P1 change:
+//     queue = [S], minTriggerTime = {S -> T1}, maxTriggerTime = {S -> T1}
+// T4: worker picks up S from the queue:
+//     queue = [], minTriggerTime = {S -> T1}, maxTriggerTime = {S -> T1}
+// T5: endpoints_controller observes pod P2 change:
+//     queue = [S], minTriggerTime = {S -> T1}, maxTriggerTime = {S -> T2}
+// T6: worker resets lastTriggerTime:
+//     queue = [S], minTriggerTime = {}, maxTriggerTime = {S -> T2}
+// T7: worker processes S from T4, writes ip tables, and exports T7-T0 as NetworkProgrammingLatency.
+// T8: worker picks up S from the queue and processes it, there is nothing in minTriggerTime, so
+//     it fall backs to maxTriggerTime and will correctly export NetworkProgrammingLatency as T9-T2
+func (e *EndpointController) getAndResetTriggerTime(key string) *time.Time {
+	e.endpointsNameToTriggerTimeMutex.Lock()
+	defer e.endpointsNameToTriggerTimeMutex.Unlock()
+
+	triggerTime, ok := e.minTriggerTime[key]
+	if ok {
+		delete(e.minTriggerTime, key)
+		return &triggerTime
+	}
+	// If min it's not set it might be the race condition explained in the documention. Try in max
+	// map.
+	triggerTime, ok = e.maxTriggerTime[key]
+	if ok {
+		delete(e.maxTriggerTime, key)
+		return &triggerTime
+	}
+
+	// Still, not found. If we're here it means the trigger was a service change.
+	// Service changes don't update last trigger time, but we plan to change that soon.
+	return nil
+}
+
 func (e *EndpointController) processNextWorkItem() bool {
 	eKey, quit := e.queue.Get()
 	if quit {
 		return false
 	}
 	defer e.queue.Done(eKey)
-	e.endpointsNameToTriggerTimeMutex.Lock()
-	// TODO(mmat@google.com): What if the same key was added between e.queue.Get() and mutex.Lock()?
-	// Should we add another map that would hold elements that were removed?
 	key := eKey.(string)
-	triggerTime := e.endpointsNameToTriggerTime[key]
-	delete(e.endpointsNameToTriggerTime, key)
-	e.endpointsNameToTriggerTimeMutex.Unlock()
-
-	err := e.syncService(key, triggerTime)
+	err := e.syncService(key, e.getAndResetTriggerTime(key))
 	e.handleErr(err, eKey)
 
 	return true
@@ -425,7 +483,7 @@ func (e *EndpointController) handleErr(err error, key interface{}) {
 	utilruntime.HandleError(err)
 }
 
-func (e *EndpointController) syncService(key string, triggerTime time.Time) error {
+func (e *EndpointController) syncService(key string, triggerTime *time.Time) error {
 	startTime := time.Now()
 	defer func() {
 		glog.V(4).Infof("Finished syncing service %q endpoints. (%v)", key, time.Since(startTime))
@@ -552,7 +610,11 @@ func (e *EndpointController) syncService(key string, triggerTime time.Time) erro
 	if newEndpoints.Annotations == nil {
 		newEndpoints.Annotations = make(map[string]string)
 	}
-	newEndpoints.Annotations[v1.EndpointsLastChangeTriggerTime] = triggerTime.Format(time.RFC3339Nano)
+	// TODO(mmat@google.com): Don't set if triggerTime is 0
+	if triggerTime != nil {
+		newEndpoints.Annotations[v1.EndpointsLastChangeTriggerTime] =
+			triggerTime.Format(time.RFC3339Nano)
+	}
 
 	glog.V(4).Infof("Update endpoints for %v/%v, ready: %d not ready: %d", service.Namespace, service.Name, totalReadyEps, totalNotReadyEps)
 	if createEndpoints {
