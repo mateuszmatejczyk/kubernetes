@@ -103,7 +103,7 @@ func NewEndpointController(podInformer coreinformers.PodInformer, serviceInforme
 	e.endpointsSynced = endpointsInformer.Informer().HasSynced
 
 	e.minTriggerTime = make(map[string]time.Time)
-	e.maxTriggerTime = make(map[string]time.Time)
+	e.triggerTimeCond = sync.NewCond(&sync.Mutex{})
 
 	return e
 }
@@ -143,13 +143,13 @@ type EndpointController struct {
 	// workerLoopPeriod is the time between worker runs. The workers process the queue of service and pod changes.
 	workerLoopPeriod time.Duration
 
-	// TODO(mmat@google.com): Document these two fields.
-	// Fields below are used to compute the In-Cluster Network Programming Latency SLI. See TODO
-	// for more details.
+	// Map from endpoint/service name (key of the queue used in this controller) to the oldest trigger
+	// change time per batching period. It will be reset every time the key is being processed.
+	// See documentation of the EndpointsLastChangeTriggerTime documentation for more details.
 	minTriggerTime map[string]time.Time
-	maxTriggerTime map[string]time.Time
-	// Mutex guarding the minTriggerTime and maxTriggerTime maps.
-	triggerTimeMutex sync.Mutex
+	// Conditional variable guarding the minTriggerTime and queue, to make operations modifying queue
+	// and minTriggerTime atomic.
+	triggerTimeCond *sync.Cond
 }
 
 // Run will not return until stopCh is closed. workers determines how many
@@ -212,37 +212,23 @@ func (e *EndpointController) addPod(obj interface{}) {
 	}
 }
 
-func getPodLastTransitionTime(pod *v1.Pod) (lastTransitionTime time.Time) {
-	for _, condition := range pod.Status.Conditions {
-		// TODO(mmat@google.com): Does it make sense?
-		if condition.Status == v1.ConditionTrue {
-			val := condition.LastProbeTime.Time
-			if lastTransitionTime.Before(val) {
-				lastTransitionTime = val
-			}
+// TODO(mmat): Move somewhere
+// Atomically enqueues the key and updates the minTriggerTime for that key if needed.
+// If the provided triggerTime is nil the minTriggerTime won't be updated.
+func (e *EndpointController) enqueue(key string, triggerTime *time.Time) {
+	e.triggerTimeCond.L.Lock()
+	defer e.triggerTimeCond.L.Unlock()
+
+	if triggerTime != nil {
+		minTriggerTime, ok := e.minTriggerTime[key]
+		if !ok || triggerTime.Before(minTriggerTime) {
+			minTriggerTime = *triggerTime
 		}
-	}
-	// TODO(mmat@google.com): Is it possible that lastTransitionTime won't be set?
-	return lastTransitionTime
-}
-
-// TODO(mmat): Move somewhere and document
-func (e *EndpointController) enqueue(key string, triggerTime time.Time) {
-	e.triggerTimeMutex.Lock()
-	defer e.triggerTimeMutex.Unlock()
-
-	minTriggerTime, ok := e.minTriggerTime[key]
-	if !ok || triggerTime.Before(minTriggerTime) {
-		minTriggerTime = triggerTime
-	}
-	maxTriggerTime, ok := e.maxTriggerTime[key]
-	if !ok || triggerTime.After(maxTriggerTime) {
-		maxTriggerTime = triggerTime
+		e.minTriggerTime[key] = minTriggerTime
 	}
 
-	e.minTriggerTime[key] = minTriggerTime
-	e.maxTriggerTime[key] = maxTriggerTime
 	e.queue.Add(key)
+	e.triggerTimeCond.Signal()
 }
 
 func podToEndpointAddress(pod *v1.Pod) *v1.EndpointAddress {
@@ -385,7 +371,8 @@ func (e *EndpointController) enqueueService(obj interface{}) {
 		return
 	}
 
-	e.queue.Add(key)
+	// TODO(mmat@google.com): Start setting trigger time for services.
+	e.enqueue(key, /*triggerTime=*/ nil)
 }
 
 // worker runs a worker thread that just dequeues items, processes them, and
@@ -397,82 +384,56 @@ func (e *EndpointController) worker() {
 	}
 }
 
-// TODO(mmat): Document better and move somewhere
-// Returns nil if triggerTime not set for given key...
+// Atomically dequeues next key from the queue and gets and resets minTriggerTime for that key.
+// Caller of this method should still call e.markAsProcessed(key) when key has been processed.
+func (e *EndpointController) dequeue() (
+		key string, triggerTime *time.Time, quit bool) {
+	e.triggerTimeCond.L.Lock()
+	defer e.triggerTimeCond.L.Unlock()
 
-// The purpose of the main and previous map is to ...
-// Imagine if there was no previous map, consider following situation
-// T0: queue = [], lastTriggerTime = {}
-// T1: Pod P1, belonging to service S, changes
-// T2: Pod P2, belonging to service S, changes
-// T3: endpoints_controller observes pod P1 change:
-//     queue = [S], lastTriggerTime = {S -> T1}
-// T4: worker picks up S from the queue:
-//     queue = [], lastTriggerTime = {S -> T1}
-// T5: endpoints_controller observes pod P2 change:
-//     queue = [S], lastTriggerTime = {S -> T1 (=min(T1,T2)}
-// T6: worker resets lastTriggerTime:
-//     queue = [S], lastTriggerTime = {}
-// T7: worker processes S from T4 and updates the endpoints object with T1 as LastTriggerChangeTime.
-// T8: worker picks up S from the queue, but there is nothing in lastTriggerTime, cannot export
-//     NetworkProgrammingLatency.
+	for e.queue.Len() == 0 {
+		e.triggerTimeCond.Wait()
+	}
 
-// T0: queue = [], minTriggerTime = {}, maxTriggerTime = {}
-// T1: Pod P1, belonging to service S, changes
-// T2: Pod P2, belonging to service S, changes
-// T3: endpoints_controller observes pod P1 change:
-//     queue = [S], minTriggerTime = {S -> T1}, maxTriggerTime = {S -> T1}
-// T4: worker picks up S from the queue:
-//     queue = [], minTriggerTime = {S -> T1}, maxTriggerTime = {S -> T1}
-// T5: endpoints_controller observes pod P2 change:
-//     queue = [S], minTriggerTime = {S -> T1}, maxTriggerTime = {S -> T2}
-// T6: worker resets lastTriggerTime:
-//     queue = [S], minTriggerTime = {}, maxTriggerTime = {S -> T2}
-// T7: worker processes S from T4 and updates the endpoints object with T2 as LastTriggerChangeTime.
-// T8: worker picks up S from the queue and processes it, there is nothing in minTriggerTime, so
-//     it fall backs to maxTriggerTime and will correctly export NetworkProgrammingLatency as T9-T2
+	rawKey, quit := e.queue.Get()
+	if quit {
+		return "", nil, true
+	}
+	key = rawKey.(string)
 
-// Note that this is not ideal, if between T4 and T6 two Pod changes were observed, with trigger
-// times T2 and T3, by definition we should export T2, but we will export T3. But because such
-// edge case are rare, and because T3-T2 should be approximately limited by the batching period in
-// this controller, we neglect this problem.
-
-func (e *EndpointController) getAndResetTriggerTime(key string) *time.Time {
-	e.triggerTimeMutex.Lock()
-	defer e.triggerTimeMutex.Unlock()
-
-	triggerTime, ok := e.minTriggerTime[key]
+	val, ok := e.minTriggerTime[key]
 	if ok {
+		// Reset trigger time for the given key.
 		delete(e.minTriggerTime, key)
-		return &triggerTime
-	}
-	// If min it's not set it might be the race condition explained in the documentation. Try in max
-	// map.
-	triggerTime, ok = e.maxTriggerTime[key]
-	if ok {
-		delete(e.maxTriggerTime, key)
-		return &triggerTime
+		triggerTime = &val
 	}
 
-	// Still, not found. If we're here it means the trigger was a service change.
-	// Service changes don't update last trigger time, but we plan to change that soon.
-	return nil
+	return key, triggerTime, quit
+}
+
+// Marks the key as done in the queue. Should be always called for each element retrievied via
+// dequeue method.
+func (e *EndpointController) markAsProcessed(key string) {
+	e.triggerTimeCond.L.Lock()
+	defer e.triggerTimeCond.L.Unlock()
+
+	e.queue.Done(key)
+	e.triggerTimeCond.Signal()
 }
 
 func (e *EndpointController) processNextWorkItem() bool {
-	eKey, quit := e.queue.Get()
+	key, triggerTime, quit := e.dequeue()
 	if quit {
 		return false
 	}
-	defer e.queue.Done(eKey)
-	key := eKey.(string)
-	err := e.syncService(key, e.getAndResetTriggerTime(key))
-	e.handleErr(err, eKey)
+	defer e.markAsProcessed(key)
+	err := e.syncService(key, triggerTime)
+	e.handleErr(err, key, triggerTime)
 
 	return true
 }
 
-func (e *EndpointController) handleErr(err error, key interface{}) {
+func (e *EndpointController) handleErr(err error, key interface{}, triggerTime *time.Time) {
 	if err == nil {
 		e.queue.Forget(key)
 		return
@@ -616,7 +577,6 @@ func (e *EndpointController) syncService(key string, triggerTime *time.Time) err
 	if newEndpoints.Annotations == nil {
 		newEndpoints.Annotations = make(map[string]string)
 	}
-	// TODO(mmat@google.com): Don't set if triggerTime is 0
 	if triggerTime != nil {
 		newEndpoints.Annotations[v1.EndpointsLastChangeTriggerTime] =
 			triggerTime.Format(time.RFC3339Nano)
@@ -669,7 +629,7 @@ func (e *EndpointController) checkLeftoverEndpoints() {
 			utilruntime.HandleError(fmt.Errorf("Unable to get key for endpoint %#v", ep))
 			continue
 		}
-		e.queue.Add(key)
+		e.enqueue(key, /*triggerTime=*/ nil)
 	}
 }
 
@@ -707,4 +667,16 @@ func shouldPodBeInEndpoints(pod *v1.Pod) bool {
 	default:
 		return true
 	}
+}
+
+// Computes the last-transition-time for the given pod, defined as max lastTransitionTime over
+// all pod-conditions.
+func getPodLastTransitionTime(pod *v1.Pod) (lastTransitionTime *time.Time) {
+	for _, condition := range pod.Status.Conditions {
+		val := condition.LastTransitionTime.Time
+		if lastTransitionTime.Before(val) {
+			lastTransitionTime = &val
+		}
+	}
+	return lastTransitionTime
 }

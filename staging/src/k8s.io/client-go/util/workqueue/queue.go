@@ -24,6 +24,7 @@ type Interface interface {
 	Add(item interface{})
 	Len() int
 	Get() (item interface{}, shutdown bool)
+	GetAndExecute(callback func(key interface{})) (item interface{}, shutdown bool)
 	Done(item interface{})
 	ShutDown()
 	ShuttingDown() bool
