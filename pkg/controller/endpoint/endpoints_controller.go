@@ -441,6 +441,8 @@ func (e *EndpointController) handleErr(err error, key interface{}, triggerTime *
 
 	if e.queue.NumRequeues(key) < maxRetries {
 		glog.V(2).Infof("Error syncing endpoints for service %q, retrying. Error: %v", key, err)
+		// Unfortunately, this will call queue add in some other go routing and we want be able to
+		// call Signal() when element is added, which invalidates everything I added here.
 		e.queue.AddRateLimited(key)
 		return
 	}
