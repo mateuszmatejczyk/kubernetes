@@ -129,8 +129,8 @@ type sharedIndexInformer struct {
 	controller Controller
 
 	processor             *sharedProcessor
-	cacheMutationDetector CacheMutationDetector
 
+	cacheMutationDetector CacheMutationDetector
 	// This block is tracked to handle late initialization of the controller
 	listerWatcher ListerWatcher
 	objectType    runtime.Object

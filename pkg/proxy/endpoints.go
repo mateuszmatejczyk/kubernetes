@@ -105,6 +105,14 @@ func NewEndpointChangeTracker(hostname string, makeEndpointInfo makeEndpointFunc
 	}
 }
 
+// endpointsChange contains all changes to endpoints that happened since proxy rules were synced.  For a single object,
+// changes are accumulated, i.e. previous is state from before applying the changes,
+// current is state after applying the changes.
+type endpointsChange struct {
+	previous EndpointsMap
+	current  EndpointsMap
+}
+
 // Update updates given service's endpoints change map based on the <previous, current> endpoints pair.  It returns true
 // if items changed, otherwise return false.  Update can be used to add/update/delete items of EndpointsChangeMap.  For example,
 // Add item
@@ -139,14 +147,6 @@ func (ect *EndpointChangeTracker) Update(previous, current *v1.Endpoints) bool {
 		delete(ect.items, namespacedName)
 	}
 	return len(ect.items) > 0
-}
-
-// endpointsChange contains all changes to endpoints that happened since proxy rules were synced.  For a single object,
-// changes are accumulated, i.e. previous is state from before applying the changes,
-// current is state after applying the changes.
-type endpointsChange struct {
-	previous EndpointsMap
-	current  EndpointsMap
 }
 
 // UpdateEndpointMapResult is the updated results after applying endpoints changes.

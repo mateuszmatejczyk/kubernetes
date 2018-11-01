@@ -146,10 +146,10 @@ type EndpointController struct {
 	// Map from endpoint/service name (key of the queue used in this controller) to the oldest trigger
 	// change time per batching period. It will be reset every time the key is being processed.
 	// See documentation of the EndpointsLastChangeTriggerTime documentation for more details.
-	minTriggerTime map[string]time.Time
-	// Conditional variable guarding the minTriggerTime and queue, to make operations modifying queue
-	// and minTriggerTime atomic.
-	triggerTimeCond *sync.Cond
+	lastMinTriggerTime map[string]time.Time
+	lastMaxTriggerTime map[string]time.Time
+	// Mutex guarding the lastMinTriggerTime and lastMaxTriggerTime maps.
+	triggerTimeMutex *sync.Mutex
 }
 
 // Run will not return until stopCh is closed. workers determines how many
