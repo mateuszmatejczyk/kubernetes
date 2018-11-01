@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/pkg/errors"
 	"github.com/renstrom/dedent"
 	"github.com/spf13/cobra"
 	flag "github.com/spf13/pflag"
@@ -47,9 +48,7 @@ import (
 	clusterinfophase "k8s.io/kubernetes/cmd/kubeadm/app/phases/bootstraptoken/clusterinfo"
 	nodebootstraptokenphase "k8s.io/kubernetes/cmd/kubeadm/app/phases/bootstraptoken/node"
 	certsphase "k8s.io/kubernetes/cmd/kubeadm/app/phases/certs"
-	controlplanephase "k8s.io/kubernetes/cmd/kubeadm/app/phases/controlplane"
 	etcdphase "k8s.io/kubernetes/cmd/kubeadm/app/phases/etcd"
-	kubeconfigphase "k8s.io/kubernetes/cmd/kubeadm/app/phases/kubeconfig"
 	kubeletphase "k8s.io/kubernetes/cmd/kubeadm/app/phases/kubelet"
 	markmasterphase "k8s.io/kubernetes/cmd/kubeadm/app/phases/markmaster"
 	patchnodephase "k8s.io/kubernetes/cmd/kubeadm/app/phases/patchnode"
@@ -58,7 +57,6 @@ import (
 	"k8s.io/kubernetes/cmd/kubeadm/app/preflight"
 	kubeadmutil "k8s.io/kubernetes/cmd/kubeadm/app/util"
 	"k8s.io/kubernetes/cmd/kubeadm/app/util/apiclient"
-	auditutil "k8s.io/kubernetes/cmd/kubeadm/app/util/audit"
 	configutil "k8s.io/kubernetes/cmd/kubeadm/app/util/config"
 	dryrunutil "k8s.io/kubernetes/cmd/kubeadm/app/util/dryrun"
 	kubeconfigutil "k8s.io/kubernetes/cmd/kubeadm/app/util/kubeconfig"
@@ -129,6 +127,7 @@ type initData struct {
 	ignorePreflightErrors sets.String
 	certificatesDir       string
 	dryRunDir             string
+	externalCA            bool
 	client                clientset.Interface
 }
 
@@ -145,7 +144,7 @@ func NewCmdInit(out io.Writer) *cobra.Command {
 			kubeadmutil.CheckErr(err)
 
 			data := c.(initData)
-			fmt.Printf("[init] using Kubernetes version: %s\n", data.cfg.KubernetesVersion)
+			fmt.Printf("[init] Using Kubernetes version: %s\n", data.cfg.KubernetesVersion)
 
 			err = initRunner.Run()
 			kubeadmutil.CheckErr(err)
@@ -165,6 +164,10 @@ func NewCmdInit(out io.Writer) *cobra.Command {
 
 	// initialize the workflow runner with the list of phases
 	initRunner.AppendPhase(phases.NewPreflightMasterPhase())
+	initRunner.AppendPhase(phases.NewKubeletStartPhase())
+	initRunner.AppendPhase(phases.NewCertsPhase())
+	initRunner.AppendPhase(phases.NewKubeConfigPhase())
+	initRunner.AppendPhase(phases.NewControlPlanePhase())
 	// TODO: add other phases to the runner.
 
 	// sets the data builder function, that will be used by the runner
@@ -306,9 +309,12 @@ func newInitData(cmd *cobra.Command, options *initOptions) (initData, error) {
 	dryRunDir := ""
 	if options.dryRun {
 		if dryRunDir, err = ioutil.TempDir("", "kubeadm-init-dryrun"); err != nil {
-			return initData{}, fmt.Errorf("couldn't create a temporary directory: %v", err)
+			return initData{}, errors.Wrap(err, "couldn't create a temporary directory")
 		}
 	}
+
+	// Checks if an external CA is provided by the user.
+	externalCA, _ := certsphase.UsingExternalCA(cfg)
 
 	return initData{
 		cfg:                   cfg,
@@ -317,6 +323,7 @@ func newInitData(cmd *cobra.Command, options *initOptions) (initData, error) {
 		dryRun:                options.dryRun,
 		dryRunDir:             dryRunDir,
 		ignorePreflightErrors: ignorePreflightErrorsSet,
+		externalCA:            externalCA,
 	}, nil
 }
 
@@ -353,7 +360,7 @@ func (d initData) CertificateDir() string {
 	return d.certificatesDir
 }
 
-// KubeConfigDir returns the path of the kubernetes configuration folder or the temporary folder path in case of DryRun.
+// KubeConfigDir returns the path of the Kubernetes configuration folder or the temporary folder path in case of DryRun.
 func (d initData) KubeConfigDir() string {
 	if d.dryRun {
 		return d.dryRunDir
@@ -361,7 +368,7 @@ func (d initData) KubeConfigDir() string {
 	return kubeadmconstants.KubernetesDir
 }
 
-// KubeConfigDir returns the path where manifest should be stored or the temporary folder path in case of DryRun.
+// ManifestDir returns the path where manifest should be stored or the temporary folder path in case of DryRun.
 func (d initData) ManifestDir() string {
 	if d.dryRun {
 		return d.dryRunDir
@@ -375,6 +382,11 @@ func (d initData) KubeletDir() string {
 		return d.dryRunDir
 	}
 	return kubeadmconstants.KubeletRunDirectory
+}
+
+// ExternalCA returns true if an external CA is provided by the user.
+func (d initData) ExternalCA() bool {
+	return d.externalCA
 }
 
 // Client returns a Kubernetes client to be used by kubeadm.
@@ -412,35 +424,9 @@ func runInit(i *initData, out io.Writer) error {
 
 	// Get directories to write files to; can be faked if we're dry-running
 	glog.V(1).Infof("[init] Getting certificates directory from configuration")
-	realCertsDir := i.cfg.CertificatesDir
-	certsDirToWriteTo, kubeConfigDir, manifestDir, kubeletDir, err := getDirectoriesToUse(i.dryRun, i.cfg.CertificatesDir)
+	certsDirToWriteTo, kubeConfigDir, manifestDir, _, err := getDirectoriesToUse(i.dryRun, i.dryRunDir, i.cfg.CertificatesDir)
 	if err != nil {
-		return fmt.Errorf("error getting directories to use: %v", err)
-	}
-
-	// First off, configure the kubelet. In this short timeframe, kubeadm is trying to stop/restart the kubelet
-	// Try to stop the kubelet service so no race conditions occur when configuring it
-	if !i.dryRun {
-		glog.V(1).Infof("Stopping the kubelet")
-		kubeletphase.TryStopKubelet()
-	}
-
-	// Write env file with flags for the kubelet to use. We do not need to write the --register-with-taints for the master,
-	// as we handle that ourselves in the markmaster phase
-	// TODO: Maybe we want to do that some time in the future, in order to remove some logic from the markmaster phase?
-	if err := kubeletphase.WriteKubeletDynamicEnvFile(&i.cfg.NodeRegistration, i.cfg.FeatureGates, false, kubeletDir); err != nil {
-		return fmt.Errorf("error writing a dynamic environment file for the kubelet: %v", err)
-	}
-
-	// Write the kubelet configuration file to disk.
-	if err := kubeletphase.WriteConfigToDisk(i.cfg.ComponentConfigs.Kubelet, kubeletDir); err != nil {
-		return fmt.Errorf("error writing kubelet configuration to disk: %v", err)
-	}
-
-	if !i.dryRun {
-		// Try to start the kubelet service in case it's inactive
-		glog.V(1).Infof("Starting the kubelet")
-		kubeletphase.TryStartKubelet()
+		return errors.Wrap(err, "error getting directories to use")
 	}
 
 	// certsDirToWriteTo is gonna equal cfg.CertificatesDir in the normal case, but gonna be a temp directory if dryrunning
@@ -448,70 +434,24 @@ func runInit(i *initData, out io.Writer) error {
 
 	adminKubeConfigPath := filepath.Join(kubeConfigDir, kubeadmconstants.AdminKubeConfigFileName)
 
-	if res, _ := certsphase.UsingExternalCA(i.cfg); !res {
-
-		// PHASE 1: Generate certificates
-		glog.V(1).Infof("[init] creating PKI Assets")
-		if err := certsphase.CreatePKIAssets(i.cfg); err != nil {
-			return err
-		}
-
-		// PHASE 2: Generate kubeconfig files for the admin and the kubelet
-		glog.V(2).Infof("[init] generating kubeconfig files")
-		if err := kubeconfigphase.CreateInitKubeConfigFiles(kubeConfigDir, i.cfg); err != nil {
-			return err
-		}
-
-	} else {
-		fmt.Println("[externalca] the file 'ca.key' was not found, yet all other certificates are present. Using external CA mode - certificates or kubeconfig will not be generated")
-	}
-
-	if features.Enabled(i.cfg.FeatureGates, features.Auditing) {
-		// Setup the AuditPolicy (either it was passed in and exists or it wasn't passed in and generate a default policy)
-		if i.cfg.AuditPolicyConfiguration.Path != "" {
-			// TODO(chuckha) ensure passed in audit policy is valid so users don't have to find the error in the api server log.
-			if _, err := os.Stat(i.cfg.AuditPolicyConfiguration.Path); err != nil {
-				return fmt.Errorf("error getting file info for audit policy file %q [%v]", i.cfg.AuditPolicyConfiguration.Path, err)
-			}
-		} else {
-			i.cfg.AuditPolicyConfiguration.Path = filepath.Join(kubeConfigDir, kubeadmconstants.AuditPolicyDir, kubeadmconstants.AuditPolicyFile)
-			if err := auditutil.CreateDefaultAuditLogPolicy(i.cfg.AuditPolicyConfiguration.Path); err != nil {
-				return fmt.Errorf("error creating default audit policy %q [%v]", i.cfg.AuditPolicyConfiguration.Path, err)
-			}
-		}
-	}
-
-	// Temporarily set cfg.CertificatesDir to the "real value" when writing controlplane manifests
-	// This is needed for writing the right kind of manifests
-	i.cfg.CertificatesDir = realCertsDir
-
-	// PHASE 3: Bootstrap the control plane
-	glog.V(1).Infof("[init] bootstraping the control plane")
-	glog.V(1).Infof("[init] creating static pod manifest")
-	if err := controlplanephase.CreateInitStaticPodManifestFiles(manifestDir, i.cfg); err != nil {
-		return fmt.Errorf("error creating init static pod manifest files: %v", err)
-	}
 	// Add etcd static pod spec only if external etcd is not configured
 	if i.cfg.Etcd.External == nil {
 		glog.V(1).Infof("[init] no external etcd found. Creating manifest for local etcd static pod")
 		if err := etcdphase.CreateLocalEtcdStaticPodManifestFile(manifestDir, i.cfg); err != nil {
-			return fmt.Errorf("error creating local etcd static pod manifest file: %v", err)
+			return errors.Wrap(err, "error creating local etcd static pod manifest file")
 		}
 	}
 
-	// Revert the earlier CertificatesDir assignment to the directory that can be written to
-	i.cfg.CertificatesDir = certsDirToWriteTo
-
 	// If we're dry-running, print the generated manifests
 	if err := printFilesIfDryRunning(i.dryRun, manifestDir); err != nil {
-		return fmt.Errorf("error printing files on dryrun: %v", err)
+		return errors.Wrap(err, "error printing files on dryrun")
 	}
 
-	// Create a kubernetes client and wait for the API server to be healthy (if not dryrunning)
+	// Create a Kubernetes client and wait for the API server to be healthy (if not dryrunning)
 	glog.V(1).Infof("creating Kubernetes client")
 	client, err := createClient(i.cfg, i.dryRun)
 	if err != nil {
-		return fmt.Errorf("error creating client: %v", err)
+		return errors.Wrap(err, "error creating client")
 	}
 
 	// waiter holds the apiclient.Waiter implementation of choice, responsible for querying the API server in various ways and waiting for conditions to be fulfilled
@@ -527,7 +467,7 @@ func runInit(i *initData, out io.Writer) error {
 
 		kubeletFailTempl.Execute(out, ctx)
 
-		return fmt.Errorf("couldn't initialize a Kubernetes cluster")
+		return errors.New("couldn't initialize a Kubernetes cluster")
 	}
 
 	// Upload currently used configuration to the cluster
@@ -535,23 +475,23 @@ func runInit(i *initData, out io.Writer) error {
 	// depend on centralized information from this source in the future
 	glog.V(1).Infof("[init] uploading currently used configuration to the cluster")
 	if err := uploadconfigphase.UploadConfiguration(i.cfg, client); err != nil {
-		return fmt.Errorf("error uploading configuration: %v", err)
+		return errors.Wrap(err, "error uploading configuration")
 	}
 
 	glog.V(1).Infof("[init] creating kubelet configuration configmap")
 	if err := kubeletphase.CreateConfigMap(i.cfg, client); err != nil {
-		return fmt.Errorf("error creating kubelet configuration ConfigMap: %v", err)
+		return errors.Wrap(err, "error creating kubelet configuration ConfigMap")
 	}
 
 	// PHASE 4: Mark the master with the right label/taint
 	glog.V(1).Infof("[init] marking the master with right label")
 	if err := markmasterphase.MarkMaster(client, i.cfg.NodeRegistration.Name, i.cfg.NodeRegistration.Taints); err != nil {
-		return fmt.Errorf("error marking master: %v", err)
+		return errors.Wrap(err, "error marking master")
 	}
 
 	glog.V(1).Infof("[init] preserving the crisocket information for the master")
 	if err := patchnodephase.AnnotateCRISocket(client, i.cfg.NodeRegistration.Name, i.cfg.NodeRegistration.CRISocket); err != nil {
-		return fmt.Errorf("error uploading crisocket: %v", err)
+		return errors.Wrap(err, "error uploading crisocket")
 	}
 
 	// This feature is disabled by default
@@ -563,7 +503,7 @@ func runInit(i *initData, out io.Writer) error {
 
 		// Enable dynamic kubelet configuration for the node.
 		if err := kubeletphase.EnableDynamicConfigForNode(client, i.cfg.NodeRegistration.Name, kubeletVersion); err != nil {
-			return fmt.Errorf("error enabling dynamic kubelet configuration: %v", err)
+			return errors.Wrap(err, "error enabling dynamic kubelet configuration")
 		}
 	}
 
@@ -583,17 +523,17 @@ func runInit(i *initData, out io.Writer) error {
 	// Create the default node bootstrap token
 	glog.V(1).Infof("[init] creating RBAC rules to generate default bootstrap token")
 	if err := nodebootstraptokenphase.UpdateOrCreateTokens(client, false, i.cfg.BootstrapTokens); err != nil {
-		return fmt.Errorf("error updating or creating token: %v", err)
+		return errors.Wrap(err, "error updating or creating token")
 	}
 	// Create RBAC rules that makes the bootstrap tokens able to post CSRs
 	glog.V(1).Infof("[init] creating RBAC rules to allow bootstrap tokens to post CSR")
 	if err := nodebootstraptokenphase.AllowBootstrapTokensToPostCSRs(client); err != nil {
-		return fmt.Errorf("error allowing bootstrap tokens to post CSRs: %v", err)
+		return errors.Wrap(err, "error allowing bootstrap tokens to post CSRs")
 	}
 	// Create RBAC rules that makes the bootstrap tokens able to get their CSRs approved automatically
 	glog.V(1).Infof("[init] creating RBAC rules to automatic approval of CSRs automatically")
 	if err := nodebootstraptokenphase.AutoApproveNodeBootstrapTokens(client); err != nil {
-		return fmt.Errorf("error auto-approving node bootstrap tokens: %v", err)
+		return errors.Wrap(err, "error auto-approving node bootstrap tokens")
 	}
 
 	// Create/update RBAC rules that makes the nodes to rotate certificates and get their CSRs approved automatically
@@ -605,21 +545,21 @@ func runInit(i *initData, out io.Writer) error {
 	// Create the cluster-info ConfigMap with the associated RBAC rules
 	glog.V(1).Infof("[init] creating bootstrap configmap")
 	if err := clusterinfophase.CreateBootstrapConfigMapIfNotExists(client, adminKubeConfigPath); err != nil {
-		return fmt.Errorf("error creating bootstrap configmap: %v", err)
+		return errors.Wrap(err, "error creating bootstrap configmap")
 	}
 	glog.V(1).Infof("[init] creating ClusterInfo RBAC rules")
 	if err := clusterinfophase.CreateClusterInfoRBACRules(client); err != nil {
-		return fmt.Errorf("error creating clusterinfo RBAC rules: %v", err)
+		return errors.Wrap(err, "error creating clusterinfo RBAC rules")
 	}
 
 	glog.V(1).Infof("[init] ensuring DNS addon")
 	if err := dnsaddonphase.EnsureDNSAddon(i.cfg, client); err != nil {
-		return fmt.Errorf("error ensuring dns addon: %v", err)
+		return errors.Wrap(err, "error ensuring dns addon")
 	}
 
 	glog.V(1).Infof("[init] ensuring proxy addon")
 	if err := proxyaddonphase.EnsureProxyAddon(i.cfg, client); err != nil {
-		return fmt.Errorf("error ensuring proxy addon: %v", err)
+		return errors.Wrap(err, "error ensuring proxy addon")
 	}
 
 	// PHASE 7: Make the control plane self-hosted if feature gate is enabled
@@ -629,7 +569,7 @@ func runInit(i *initData, out io.Writer) error {
 		// plane components and remove the static manifests:
 		fmt.Println("[self-hosted] creating self-hosted control plane")
 		if err := selfhostingphase.CreateSelfHostedControlPlane(manifestDir, kubeConfigDir, i.cfg, client, waiter, i.dryRun); err != nil {
-			return fmt.Errorf("error creating self hosted control plane: %v", err)
+			return errors.Wrap(err, "error creating self hosted control plane")
 		}
 	}
 
@@ -642,7 +582,7 @@ func runInit(i *initData, out io.Writer) error {
 	// Prints the join command, multiple times in case the user has multiple tokens
 	for _, token := range tokens {
 		if err := printJoinCommand(out, adminKubeConfigPath, token, i.skipTokenPrint); err != nil {
-			return fmt.Errorf("failed to print join command: %v", err)
+			return errors.Wrap(err, "failed to print join command")
 		}
 	}
 	return nil
@@ -676,12 +616,8 @@ func createClient(cfg *kubeadmapi.InitConfiguration, dryRun bool) (clientset.Int
 
 // getDirectoriesToUse returns the (in order) certificates, kubeconfig and Static Pod manifest directories, followed by a possible error
 // This behaves differently when dry-running vs the normal flow
-func getDirectoriesToUse(dryRun bool, defaultPkiDir string) (string, string, string, string, error) {
+func getDirectoriesToUse(dryRun bool, dryRunDir string, defaultPkiDir string) (string, string, string, string, error) {
 	if dryRun {
-		dryRunDir, err := ioutil.TempDir("", "kubeadm-init-dryrun")
-		if err != nil {
-			return "", "", "", "", fmt.Errorf("couldn't create a temporary directory: %v", err)
-		}
 		// Use the same temp dir for all
 		return dryRunDir, dryRunDir, dryRunDir, dryRunDir, nil
 	}

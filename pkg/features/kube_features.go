@@ -49,6 +49,7 @@ const (
 	// owner: @vishh
 	// alpha: v1.5
 	//
+	// DEPRECATED - This feature is deprecated by Pod Priority and Preemption as of Kubernetes 1.13.
 	// Ensures guaranteed scheduling of pods marked with a special pod annotation `scheduler.alpha.kubernetes.io/critical-pod`
 	// and also prevents them from being evicted from a node.
 	// Note: This feature is not supported for `BestEffort` pods.
@@ -455,8 +456,9 @@ var defaultKubernetesFeatureGates = map[utilfeature.Feature]utilfeature.FeatureS
 
 	// inherited features from apiextensions-apiserver, relisted here to get a conflict if it is changed
 	// unintentionally on either side:
-	apiextensionsfeatures.CustomResourceValidation:   {Default: true, PreRelease: utilfeature.Beta},
-	apiextensionsfeatures.CustomResourceSubresources: {Default: true, PreRelease: utilfeature.Beta},
+	apiextensionsfeatures.CustomResourceValidation:        {Default: true, PreRelease: utilfeature.Beta},
+	apiextensionsfeatures.CustomResourceSubresources:      {Default: true, PreRelease: utilfeature.Beta},
+	apiextensionsfeatures.CustomResourceWebhookConversion: {Default: false, PreRelease: utilfeature.Alpha},
 
 	// features that enable backwards compatibility but are scheduled to be removed
 	// ...

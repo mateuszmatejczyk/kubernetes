@@ -1,4 +1,7 @@
 aliases:
+  sig-storage-reviewers:
+    - saad-ali
+    - childsb
   sig-scheduling-maintainers:
     - bsalamat
     - davidopp
@@ -74,6 +77,7 @@ aliases:
     - vishh
     - yifan-gu
     - yujuhong
+    - krmayankk
   sig-network-approvers:
     - bowei
     - caseydavenport
