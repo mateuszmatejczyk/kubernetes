@@ -31,7 +31,7 @@ assumptions.
 1. Client of this util performs two operations, it observes events and runs the sync function.
 2. Multiple events can be observed per single sync function run (there is batching).
 3. Runs of sync function are mutually exclusive per endpoints object, i.e. for a single endpoints
-   object there can be no two sync functions running for it in the same time.
+   object there can be no two sync functions running at the same time.
 4. Observe function and sync function can run in parallel.
 5. Events are observed in the chronological order, i.e. if T(E1) < T(E2) then E1 will be
    observed before E2.

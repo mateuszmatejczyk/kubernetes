@@ -75,7 +75,7 @@ func TestEventsDuringListening(t *testing.T) {
 	tester.startListing(key)
 	tester.observe(key, t1) // P1
 	tester.observe(key, t2) // P0
-	// 															P0, P1
+	//                              P0, P1
 	tester.whenListingReturned(key, t2, t1).expect(t0)
 
 	tester.observe(key, t3) // P1
@@ -96,16 +96,16 @@ func TestEventsDuringListening_FresherEvent(t *testing.T) {
 	// This event arrived directly after listing ended, it's possible as the mutex is unlocked outside
 	// of the list method - mutex.Lock(); List(); (event observed) mutex.Unlock();
 	tester.observe(key, t2) // P2
-	// 															P0, P1
+	//                              P0, P1
 	tester.whenListingReturned(key, t0, t1).expect(t0)
 
 	tester.observe(key, t3) // P2
 
 	tester.startListing(key)
 	tester.observe(key, t4) // P2
-	// 															P0, P1  P2
+	//                              P0, P1  P2
 	tester.whenListingReturned(key, t0, t1, t4).expect(t2) // t2 wasn't lost, it was marked as dirty
-																												 // and processed later.
+	                                                       // and processed later.
 }
 
 func TestEventsDuringListening_MultipleEvents(t *testing.T) {
@@ -118,7 +118,7 @@ func TestEventsDuringListening_MultipleEvents(t *testing.T) {
 
 	tester.observe(key, t2) // P0
 	tester.observe(key, t3) // P2
-	// 															P0, P1
+	//                              P0, P1
 	tester.whenListingReturned(key, t2, t1).expect(t0)
 
 	tester.observe(key, t4) // P2
@@ -132,7 +132,7 @@ func TestEventsAfterListingInFirstBatch(t *testing.T) {
 
 	tester.startListing(key)
 	// P0, P1 already changed and will be returned in list, but no events yet.
-	// 															P0, P1
+	//                              P0, P1
 	tester.whenListingReturned(key, t0, t1).expect(t0)
 
 	// Delayed events
@@ -150,7 +150,7 @@ func TestEventsAfterListingInBothBatches(t *testing.T) {
 
 	tester.startListing(key)
 	// P0, P1 already changed and will be returned in list, but no events yet.
-	// 															P0, P1
+	//                              P0, P1
 	tester.whenListingReturned(key, t0, t1).expect(t0)
 
 	// Delayed events
@@ -172,12 +172,12 @@ func TestEventsAfterListing_SameObjectUpdatedMultipleTimes(t *testing.T) {
 
 	tester.startListing(key)
 	// P0, P1 already changed and will be returned in list, but no events yet.
-	// 															P0, P1
+	//                              P0, P1
 	tester.whenListingReturned(key, t2, t1).expect(t1)
 
 	// Delayed events
 	tester.observe(key, t0) // P0 - here we realize that we exported wrong time, error counter is
-	                        //       incremented.
+	                        //      trincremented.
 	                        // TODO(mmat@google.com): Figure out how to test counter.
 	tester.observe(key, t1) // P1
 	tester.observe(key, t2) // P0
@@ -218,8 +218,8 @@ func NoEventsListReturnedNothing(t *testing.T) {
 	tester := newTester(t)
 
 	tester.startListing(key)
-	// This shouldn't happen, but to make sure it won't crush.
-	tester.whenListingReturned(key)
+	// This shouldn't happen, but make sure it won't crash.
+	tester.whenListingReturned(key).expect(time.Time{}) // Zero time returned.
 }
 
 
