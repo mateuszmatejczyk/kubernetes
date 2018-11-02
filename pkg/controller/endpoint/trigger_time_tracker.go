@@ -101,11 +101,9 @@ func (this *triggerTimeTracker) observe(key string, triggerTime time.Time) {
 		// Trigger was already processed
 		if triggerTime.Before(this.lastSyncMinTriggerTime[key]) {
 			// Oops, we exported a wrong time in the last processing. Increment the error counter.
-			defer func() {
-				LastChangeTriggerTimeMiscalculated.Inc()
-				glog.Warningf("Miscalculated LastChangeTriggerTime annotation. " +
-					"Should export: %s, exported %s", triggerTime, this.lastSyncMinTriggerTime[key])
-			}()
+ 			LastChangeTriggerTimeMiscalculated.Inc()
+			glog.Warningf("Miscalculated LastChangeTriggerTime annotation. " +
+				"Should export: %s, exported %s", triggerTime, this.lastSyncMinTriggerTime[key])
 
 			// Correct the lastSyncMinTriggerTime so we don't increment the error again for the same
 			// batch. It could happen if the trigger change times were T0, T1, T2 and we exported T2 in

@@ -20,6 +20,8 @@ package endpoint
 import (
 	"testing"
 	"time"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 var (
@@ -175,10 +177,12 @@ func TestEventsAfterListing_SameObjectUpdatedMultipleTimes(t *testing.T) {
 	//                              P0, P1
 	tester.whenListingReturned(key, t2, t1).expect(t1)
 
+	tester.assertCounterValue(LastChangeTriggerTimeMiscalculated, 0)
 	// Delayed events
-	tester.observe(key, t0) // P0 - here we realize that we exported wrong time, error counter is
-	                        //      incremented.
-	                        // TODO(mmat@google.com): Figure out how to test counter.
+	tester.observe(key, t0) // P0 - here we realize that we exported wrong time.
+	// Error counter was incremented.
+	tester.assertCounterValue(LastChangeTriggerTimeMiscalculated, 1)
+
 	tester.observe(key, t1) // P1
 	tester.observe(key, t2) // P0
 	tester.observe(key, t3) // P1
@@ -246,5 +250,14 @@ type subject struct {
 func (s subject) expect(val time.Time) {
 	if s.got != val {
 		s.t.Errorf("Wrong trigger time, expected %s, got %s", val, s.got)
+	}
+}
+
+func (this *tester) assertCounterValue(c prometheus.Counter, wanted float64) {
+	pb := &dto.Metric{}
+	c.Write(pb)
+	got := pb.GetCounter().GetValue()
+	if got != wanted {
+		this.t.Errorf("Wrong counter (%s) value, expected %f, got %f", c.Desc(), wanted, got)
 	}
 }
