@@ -177,7 +177,7 @@ func TestEventsAfterListing_SameObjectUpdatedMultipleTimes(t *testing.T) {
 
 	// Delayed events
 	tester.observe(key, t0) // P0 - here we realize that we exported wrong time, error counter is
-	                        //      trincremented.
+	                        //      incremented.
 	                        // TODO(mmat@google.com): Figure out how to test counter.
 	tester.observe(key, t1) // P1
 	tester.observe(key, t2) // P0
