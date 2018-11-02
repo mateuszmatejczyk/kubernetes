@@ -86,7 +86,7 @@ func newTriggerTimeTracker() *triggerTimeTracker {
 }
 
 // Method, updating the minTriggerTime, that should be called every time an event is observed.
-func (this *triggerTimeTracker) Observe(key string, triggerTime time.Time) {
+func (this *triggerTimeTracker) observe(key string, triggerTime time.Time) {
 	this.mutex.Lock()
 	defer this.mutex.Unlock()
 
@@ -95,7 +95,8 @@ func (this *triggerTimeTracker) Observe(key string, triggerTime time.Time) {
 		return
 	}
 
-	if triggerTime.Before(this.lastSyncMaxTriggerTime[key]) {
+	if triggerTime.Before(this.lastSyncMaxTriggerTime[key]) ||
+			triggerTime == this.lastSyncMaxTriggerTime[key] {
 		// Trigger was already processed
 		if triggerTime.Before(this.lastSyncMinTriggerTime[key]) {
 			// Oops, we exported a wrong time in the last processing. Increment the error counter.
@@ -119,7 +120,7 @@ func (this *triggerTimeTracker) Observe(key string, triggerTime time.Time) {
 }
 
 // Method to be called directly before the call to the "list" function.
-func (this *triggerTimeTracker) StartListing(key string) {
+func (this *triggerTimeTracker) startListing(key string) {
 	this.mutex.Lock()
 	defer this.mutex.Unlock()
 	this.isListingObjects[key] = true
@@ -128,12 +129,10 @@ func (this *triggerTimeTracker) StartListing(key string) {
 // Method that should be called directly after the listing objects has ended. It will reset the
 // state for the given endpoints key and return the time that should be exported as the
 // EndpointsLastChangeTriggerTime annotation.
-func (this *triggerTimeTracker) StopListeningAndReset(
-		key string, maxTimeFromListingObjects time.Time) (endpointsLastChangeTriggerTime time.Time){
+func (this *triggerTimeTracker) stopListingAndReset(
+		key string, triggerTimesFromListing []time.Time) (endpointsLastChangeTriggerTime time.Time){
 	this.mutex.Lock()
 	defer this.mutex.Unlock()
-
-	this.isListingObjects[key] = false
 
 	if _, ok := this.minTriggerTime[key]; !ok {
 		// There was no event observed that set the minTriggerTime.
@@ -141,34 +140,54 @@ func (this *triggerTimeTracker) StopListeningAndReset(
 		if p := minBiggerThan(this.dirtyTriggerTimes[key], this.lastSyncMaxTriggerTime[key]); p != nil {
 			this.minTriggerTime[key] = *p
 		} else {
-			// The only thing we can do is to use the maxTimeFromListingObjects.
-			this.minTriggerTime[key] = maxTimeFromListingObjects
+			// The only thing we can do is to use the min(triggerTimesFromListing).
+			this.minTriggerTime[key] = min(triggerTimesFromListing)
 		}
 	}
 
 	endpointsLastChangeTriggerTime = this.minTriggerTime[key]
 	delete(this.minTriggerTime, key)
 
+	maxTimeFromListing := max(triggerTimesFromListing)
 	// See if there is anything in dirty times that could have been a potential new minTriggerTime.
-	if p := minBiggerThan(this.dirtyTriggerTimes[key], maxTimeFromListingObjects); p != nil {
+	if p := minBiggerThan(this.dirtyTriggerTimes[key], maxTimeFromListing); p != nil {
 		this.minTriggerTime[key] = *p
 	}
 	// Clear dirty times.
-	this.dirtyTriggerTimes = nil
+	this.isListingObjects[key] = false
+	this.dirtyTriggerTimes[key] = nil
 
 	// Updated the lastSync min and max.
 	this.lastSyncMinTriggerTime[key] = endpointsLastChangeTriggerTime
-	this.lastSyncMaxTriggerTime[key] = maxTimeFromListingObjects
+	this.lastSyncMaxTriggerTime[key] = maxTimeFromListing
 	return endpointsLastChangeTriggerTime
 }
 
 
 // ----- Util Functions -----
 
+func min(times []time.Time) (minTime time.Time) {
+	for _, t := range times {
+		if minTime.IsZero() || t.Before(minTime) {
+			minTime = t
+		}
+	}
+	return minTime
+}
+
+func max(times []time.Time) (maxTime time.Time) {
+	for _, t := range times {
+		if t.After(maxTime) {
+			maxTime = t
+		}
+	}
+	return maxTime
+}
+
 func minBiggerThan(times []time.Time, biggerThan time.Time) (minTime *time.Time) {
-	for _, e := range times {
-		if e.After(biggerThan) && (minTime == nil || e.Before(*minTime)) {
-			minTime = &e
+	for _, t := range times {
+		if t.After(biggerThan) && (minTime == nil || t.Before(*minTime)) {
+			minTime = &t
 		}
 	}
 	return minTime

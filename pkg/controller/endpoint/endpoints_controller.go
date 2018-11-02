@@ -43,7 +43,6 @@ import (
 	"k8s.io/kubernetes/pkg/util/metrics"
 
 	"github.com/golang/glog"
-	"sync"
 )
 
 const (
@@ -102,11 +101,7 @@ func NewEndpointController(podInformer coreinformers.PodInformer, serviceInforme
 	e.endpointsLister = endpointsInformer.Lister()
 	e.endpointsSynced = endpointsInformer.Informer().HasSynced
 
-	e.lastSyncMaxTriggerTime = make(map[string]time.Time)
-	e.lastSyncMinTriggerTime = make(map[string]time.Time)
-	e.minTriggerTime = make(map[string]time.Time)
-	e.dirtyTriggerTimes = make(map[string][]time.Time)
-	e.isListingObjects = make(map[string]bool)
+	e.triggerTimeTracker = newTriggerTimeTracker()
 
 	return e
 }
@@ -146,29 +141,8 @@ type EndpointController struct {
 	// workerLoopPeriod is the time between worker runs. The workers process the queue of service and pod changes.
 	workerLoopPeriod time.Duration
 
-	// TODO(mmat): Consider moving everything below to a separate class.
-	// All fields below are used to compute and set the EndpointsLastChangeTriggerTime annotation.
-
-	// Map from Endpoints object name (key of the queue used in this controller) to the min trigger
-	// change time that was saved when the endpoints object was last changed by this controller.
-	// This map will be updated only in the syncService method.
-	lastSyncMinTriggerTime map[string]time.Time
-	// Similar map as the lastMinTriggerTime but stores the last *max* trigger change time.
-	lastSyncMaxTriggerTime map[string]time.Time
-	// Map storing min trigger change time observed since the last updated of the endpoints object.
-	// In contrast to lastSavedMinTriggerTime and lastSavedMaxTriggerTime this map will be updated
-	// every time a trigger change is observed (e.g. Pod added / updated / removed) and reset in the
-	// syncService method.
-	minTriggerTime map[string]time.Time
-	// Map storing all trigger times that were observed during the time the pods were listed in the
-	// syncService function. We need this multi-map to make sure that we haven't missed any event due
-	// a bad race condition.
-	dirtyTriggerTimes map[string][]time.Time
-	// Map from the endpoints object name to the bool that reflects whether the objects are currently
-	// being listed for the given endpoints object.
-	isListingObjects map[string]bool
-	// Mutex guarding all the above fields.
-	triggerTimeMutex sync.Mutex
+	// Trigger time tracker to compute the EndpointsLastChangeTriggerTime annotation.
+	triggerTimeTracker *triggerTimeTracker
 }
 
 // Run will not return until stopCh is closed. workers determines how many
@@ -224,10 +198,10 @@ func (e *EndpointController) addPod(obj interface{}) {
 		return
 	}
 
-	// TODO(mmat);
-	// triggerTime := getPodLastTransitionTime(pod)
+	triggerTime := getPodLastTransitionTime(pod)
 
 	for key := range services {
+		e.triggerTimeTracker.observe(key, triggerTime)
 		e.queue.Add(key)
 	}
 }
@@ -328,7 +302,10 @@ func (e *EndpointController) updatePod(old, cur interface{}) {
 		services = determineNeededServiceUpdates(oldServices, services, podChangedFlag)
 	}
 
+	triggerTime := getPodLastTransitionTime(newPod)
+
 	for key := range services {
+		e.triggerTimeTracker.observe(key, triggerTime)
 		e.queue.Add(key)
 	}
 }
@@ -444,12 +421,15 @@ func (e *EndpointController) syncService(key string) error {
 	}
 
 	glog.V(5).Infof("About to update endpoints for service %q", key)
+
+	e.triggerTimeTracker.startListing(key)
 	pods, err := e.podLister.Pods(service.Namespace).List(labels.Set(service.Spec.Selector).AsSelectorPreValidated())
 	if err != nil {
 		// Since we're getting stuff from a local cache, it is
 		// basically impossible to get this error.
 		return err
 	}
+	lastTriggerChangeTime := e.triggerTimeTracker.stopListingAndReset(key, getPodTriggerTimes(pods))
 
 	// If the user specified the older (deprecated) annotation, we have to respect it.
 	tolerateUnreadyEndpoints := service.Spec.PublishNotReadyAddresses
@@ -539,6 +519,10 @@ func (e *EndpointController) syncService(key string) error {
 	newEndpoints.Labels = service.Labels
 	if newEndpoints.Annotations == nil {
 		newEndpoints.Annotations = make(map[string]string)
+	}
+	if !lastTriggerChangeTime.IsZero() {
+		newEndpoints.Annotations[v1.EndpointsLastChangeTriggerTime] =
+				lastTriggerChangeTime.Format(time.RFC3339Nano)
 	}
 
 	glog.V(4).Infof("Update endpoints for %v/%v, ready: %d not ready: %d", service.Namespace, service.Name, totalReadyEps, totalNotReadyEps)
@@ -630,29 +614,20 @@ func shouldPodBeInEndpoints(pod *v1.Pod) bool {
 
 // Computes the last-transition-time for the given pod, defined as max lastTransitionTime over
 // all pod-conditions.
-func getPodLastTransitionTime(pod *v1.Pod) (lastTransitionTime *time.Time) {
+func getPodLastTransitionTime(pod *v1.Pod) (lastTransitionTime time.Time) {
 	for _, condition := range pod.Status.Conditions {
 		val := condition.LastTransitionTime.Time
 		if lastTransitionTime.Before(val) {
-			lastTransitionTime = &val
+			lastTransitionTime = val
 		}
 	}
 	return lastTransitionTime
 }
 
-// --------------------------------------------
-
-// Assumptions:
-// 1. Client of this util performs two operations, it observes events and runs the sync function.
-// 2. Multiple events can be observed per single sync function run (there is batching).
-// 3. Runs of sync function are mutually exclusive per endpoints object, i.e. for a single endpoints
-//    object there can be no two sync functions running for it in the same time.
-// 4. Events are observed in the chronological order, i.e. if T(E1) < T(E2) then E1 will be
-//    observed before E2.
-// 5. Sync function doesn't use state from the observed events directly. It uses the "list" method
-//    that returns objects in a state that is AT LEAST as fresh as what was observed in the events,
-//    i.e. it's possible that the sync function will see state that wasn't yet observed, but
-//    never the other way around.
-// Please note that the EndpointsController satisfied all this assumptions in a very strict way.
-
-
+func getPodTriggerTimes(pods []*v1.Pod) []time.Time {
+  times := make([]time.Time, 0, len(pods))
+  for _, pod := range pods {
+  	times = append(times, getPodLastTransitionTime(pod))
+	}
+  return times;
+}

@@ -27,79 +27,201 @@ var (
 	t1 = t0.Add(time.Second)
 	t2 = t1.Add(time.Second)
 	t3 = t2.Add(time.Second)
+	t4 = t3.Add(time.Second)
+	t5 = t4.Add(time.Second)
 
 	key = "my_endpoint"
 )
 
-func TestSingleEvent(t *testing.T) {
-	tracker := newTriggerTimeTracker()
-
-	tracker.Observe(key, t0)
-	tracker.StartListing(key)
-	if got := tracker.StopListeningAndReset(key, t0); got != t0 {
-		t.Errorf("Wrong trigger time, expected %s, got %s", t0, got)
-	}
-}
-
-func TestSingleBatchTwoEvents(t *testing.T) {
-	tracker := newTriggerTimeTracker()
-
-	tracker.Observe(key, t0)
-	tracker.Observe(key, t1)
-	tracker.StartListing(key)
-	if got := tracker.StopListeningAndReset(key, t1); got != t0 {
-		t.Errorf("Wrong trigger time, expected %s, got %s", t0, got)
-	}
-}
-
-func TestSingleBatchMissingEvent(t *testing.T) {
-	tracker := newTriggerTimeTracker()
-
-	tracker.Observe(key, t0)
-	tracker.Observe(key, t1)
-	tracker.StartListing(key)
-	if got := tracker.StopListeningAndReset(key, t2); got != t0 {
-		t.Errorf("Wrong trigger time, expected %s, got %s", t0, got)
-	}
-}
-
-func TestSingleBatchEventObservedAfterStartListing(t *testing.T) {
-	tracker := newTriggerTimeTracker()
-
-	tracker.Observe(key, t0)
-	tracker.StartListing(key)
-	tracker.Observe(key, t1)
-	if got := tracker.StopListeningAndReset(key, t1); got != t0 {
-		t.Errorf("Wrong trigger time, expected %s, got %s", t0, got)
-	}
-}
-
-func TestSingleEventObservedAfterStartListing(t *testing.T) {
-	tracker := newTriggerTimeTracker()
-
-	tracker.StartListing(key)
-	tracker.Observe(key, t0)
-	if got := tracker.StopListeningAndReset(key, t0); got != t0 {
-		t.Errorf("Wrong trigger time, expected %s, got %s", t0, got)
-	}
-}
-
-func TestTwoEventsFirstObservedAfterStartListing(t *testing.T) {
-	tracker := newTriggerTimeTracker()
-
-	tracker.StartListing(key)
-	tracker.Observe(key, t0)
-	if got := tracker.StopListeningAndReset(key, t1); got != t0 {
-		t.Errorf("Wrong trigger time, expected %s, got %s", t0, got)
-	}
-}
-
-func TestNoEventObserved(t *testing.T) {
+func TestObserveBeforeStartListing(t *testing.T) {
 	tester := newTester(t)
 
-	tester.StartListing(key)
-	tester.whenListeningReturned(key, t1).expect(t1)
+	tester.observe(key, t0) // P0 - Pod0. To make clear which object was observed.
+	tester.observe(key, t1) // P1
+
+	tester.startListing(key)     // P0, P1
+	tester.whenListingReturned(key, t0, t1).expect(t0)
+
+	tester.observe(key, t2) // P1
+	tester.observe(key, t3) // P0
+
+	tester.startListing(key)     // P0, P1
+	tester.whenListingReturned(key, t3, t2).expect(t2)
 }
+
+func TestObserveBeforeStartListing_MultipleUpdatesOfTheSameObject(t *testing.T) {
+	tester := newTester(t)
+
+	tester.observe(key, t0) // P0
+	tester.observe(key, t1) // P1
+	tester.observe(key, t2) // P0
+
+	tester.startListing(key)     // P0, P1
+	tester.whenListingReturned(key, t2, t1).expect(t0)
+
+	tester.observe(key, t3) // P1
+	tester.observe(key, t4) // P0
+	tester.observe(key, t5) // P1
+
+	tester.startListing(key)     // P0, P1
+	tester.whenListingReturned(key, t4, t5).expect(t3)
+}
+
+func TestEventsDuringListening(t *testing.T) {
+	tester := newTester(t)
+
+	tester.observe(key, t0) // P0
+
+	tester.startListing(key)
+	tester.observe(key, t1) // P1
+	tester.observe(key, t2) // P0
+	// 															P0, P1
+	tester.whenListingReturned(key, t2, t1).expect(t0)
+
+	tester.observe(key, t3) // P1
+	tester.observe(key, t4) // P0
+
+	tester.startListing(key)     // P0, P1
+	tester.whenListingReturned(key, t4, t3).expect(t3)
+}
+
+func TestEventsDuringListening_FresherEvent(t *testing.T) {
+	tester := newTester(t)
+
+	tester.observe(key, t0) // P0
+	tester.observe(key, t1) // P1
+
+	tester.startListing(key)
+
+	// This event arrived directly after listing ended, it's possible as the mutex is unlocked outside
+	// of the list method - mutex.Lock(); List(); (event observed) mutex.Unlock();
+	tester.observe(key, t2) // P2
+	// 															P0, P1
+	tester.whenListingReturned(key, t0, t1).expect(t0)
+
+	tester.observe(key, t3) // P2
+
+	tester.startListing(key)
+	tester.observe(key, t4) // P2
+	// 															P0, P1  P2
+	tester.whenListingReturned(key, t0, t1, t4).expect(t2) // t2 wasn't lost, it was marked as dirty
+																												 // and processed later.
+}
+
+func TestEventsDuringListening_MultipleEvents(t *testing.T) {
+	tester := newTester(t)
+
+	tester.observe(key, t0) // P0
+	tester.observe(key, t1) // P1
+
+	tester.startListing(key)
+
+	tester.observe(key, t2) // P0
+	tester.observe(key, t3) // P2
+	// 															P0, P1
+	tester.whenListingReturned(key, t2, t1).expect(t0)
+
+	tester.observe(key, t4) // P2
+
+	tester.startListing(key)     // P0, P1  P2
+	tester.whenListingReturned(key, t0, t1, t4).expect(t3)
+}
+
+func TestEventsAfterListingInFirstBatch(t *testing.T) {
+	tester := newTester(t)
+
+	tester.startListing(key)
+	// P0, P1 already changed and will be returned in list, but no events yet.
+	// 															P0, P1
+	tester.whenListingReturned(key, t0, t1).expect(t0)
+
+	// Delayed events
+	tester.observe(key, t0) // P0
+	tester.observe(key, t1) // P1
+
+	tester.observe(key, t2) // P1
+
+	tester.startListing(key)     // P0, P1
+	tester.whenListingReturned(key, t0, t2).expect(t2) // t0 and t1 change was already processed
+}
+
+func TestEventsAfterListingInBothBatches(t *testing.T) {
+	tester := newTester(t)
+
+	tester.startListing(key)
+	// P0, P1 already changed and will be returned in list, but no events yet.
+	// 															P0, P1
+	tester.whenListingReturned(key, t0, t1).expect(t0)
+
+	// Delayed events
+	tester.observe(key, t0) // P0
+	tester.observe(key, t1) // P1
+
+	tester.startListing(key)     // P0, P1
+	tester.whenListingReturned(key, t3, t2).expect(t2) // t0 and t1 change was already processed
+
+	tester.observe(key, t2) // P1
+	tester.observe(key, t3) // P0
+
+	tester.startListing(key)     // P0, P1
+	tester.whenListingReturned(key, t3, t2).expect(t2)
+}
+
+func TestEventsAfterListing_SameObjectUpdatedMultipleTimes(t *testing.T) {
+	tester := newTester(t)
+
+	tester.startListing(key)
+	// P0, P1 already changed and will be returned in list, but no events yet.
+	// 															P0, P1
+	tester.whenListingReturned(key, t2, t1).expect(t1)
+
+	// Delayed events
+	tester.observe(key, t0) // P0 - here we realize that we exported wrong time, error counter is
+	                        //       incremented.
+	                        // TODO(mmat@google.com): Figure out how to test counter.
+	tester.observe(key, t1) // P1
+	tester.observe(key, t2) // P0
+	tester.observe(key, t3) // P1
+
+	tester.startListing(key)     // P0, P1
+	tester.whenListingReturned(key, t2, t3).expect(t3)
+}
+
+func TestMultipleKeysUpdatedSimultaneously(t *testing.T) {
+	key2 := "my-endpoints-2"
+
+	tester := newTester(t)
+
+	tester.observe(key, t0) // E0_P0
+	tester.observe(key, t1) // E0_P1
+
+	tester.observe(key2, t1) // E1_P0
+
+	tester.startListing(key)     // P0, P1
+	tester.whenListingReturned(key, t0, t1).expect(t0)
+
+	tester.startListing(key2)
+	tester.observe(key2, t2) // E1_P1
+	//                               P0  P1
+	tester.whenListingReturned(key2, t1, t2).expect(t1)
+
+	tester.observe(key, t5) // E0_P0
+
+	tester.startListing(key2)     // P0, P1
+	tester.whenListingReturned(key2, t4, t3).expect(t3)
+
+	tester.startListing(key)     // P0, P1
+	tester.whenListingReturned(key, t5, t1).expect(t5)
+}
+
+func NoEventsListReturnedNothing(t *testing.T) {
+	tester := newTester(t)
+
+	tester.startListing(key)
+	// This shouldn't happen, but to make sure it won't crush.
+	tester.whenListingReturned(key)
+}
+
 
 // ------- Test Utils -------
 
@@ -112,8 +234,8 @@ func newTester(t *testing.T) *tester {
 	return &tester { newTriggerTimeTracker(), t}
 }
 
-func (this *tester) whenListeningReturned(key string, val time.Time) subject {
-	return subject { this.StopListeningAndReset(key, val), this.t }
+func (this *tester) whenListingReturned(key string, val ...time.Time) subject {
+	return subject { this.stopListingAndReset(key, val), this.t }
 }
 
 type subject struct {
