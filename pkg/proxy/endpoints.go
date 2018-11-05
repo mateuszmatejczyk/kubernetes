@@ -30,6 +30,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	utilproxy "k8s.io/kubernetes/pkg/proxy/util"
 	utilnet "k8s.io/kubernetes/pkg/util/net"
+	"time"
 )
 
 // BaseEndpointInfo contains base information that defines an endpoint.
@@ -92,6 +93,8 @@ type EndpointChangeTracker struct {
 	// isIPv6Mode indicates if change tracker is under IPv6/IPv4 mode. Nil means not applicable.
 	isIPv6Mode *bool
 	recorder   record.EventRecorder
+	// TODO(document)
+	lastChangeTriggerTimes map[types.NamespacedName]time.Time
 }
 
 // NewEndpointChangeTracker initializes an EndpointsChangeMap
@@ -102,6 +105,7 @@ func NewEndpointChangeTracker(hostname string, makeEndpointInfo makeEndpointFunc
 		makeEndpointInfo: makeEndpointInfo,
 		isIPv6Mode:       isIPv6Mode,
 		recorder:         recorder,
+		lastChangeTriggerTimes: make(map[types.NamespacedName]time.Time),
 	}
 }
 
@@ -132,13 +136,22 @@ func (ect *EndpointChangeTracker) Update(previous, current *v1.Endpoints) bool {
 		change = &endpointsChange{}
 		change.previous = ect.endpointsToEndpointsMap(previous)
 		ect.items[namespacedName] = change
+		if t := getLastChangeTriggerTime(endpoints); !t.IsZero() {
+			ect.lastChangeTriggerTimes[namespacedName] = t
+		}
 	}
 	change.current = ect.endpointsToEndpointsMap(current)
 	// if change.previous equal to change.current, it means no change
 	if reflect.DeepEqual(change.previous, change.current) {
 		delete(ect.items, namespacedName)
+		delete(ect.lastChangeTriggerTimes, namespacedName)
 	}
 	return len(ect.items) > 0
+}
+
+func getLastChangeTriggerTime(endpoints *v1.Endpoints) time.Time {
+	val, _ := time.Parse(time.RFC3339Nano, endpoints.Annotations[v1.EndpointsLastChangeTriggerTime])
+	return val
 }
 
 // endpointsChange contains all changes to endpoints that happened since proxy rules were synced.  For a single object,
@@ -157,6 +170,8 @@ type UpdateEndpointMapResult struct {
 	StaleEndpoints []ServiceEndpoint
 	// StaleServiceNames identifies if a service is stale.
 	StaleServiceNames []ServicePortName
+	// TODO(mmat): Document
+	LastChangeTriggerTimes []time.Time
 }
 
 // UpdateEndpointsMap updates endpointsMap base on the given changes.
@@ -164,7 +179,8 @@ func UpdateEndpointsMap(endpointsMap EndpointsMap, changes *EndpointChangeTracke
 	result.StaleEndpoints = make([]ServiceEndpoint, 0)
 	result.StaleServiceNames = make([]ServicePortName, 0)
 
-	endpointsMap.apply(changes, &result.StaleEndpoints, &result.StaleServiceNames)
+	endpointsMap.apply(
+		changes, &result.StaleEndpoints, &result.StaleServiceNames, &result.LastChangeTriggerTimes)
 
 	// TODO: If this will appear to be computationally expensive, consider
 	// computing this incrementally similarly to endpointsMap.
@@ -241,7 +257,9 @@ func (ect *EndpointChangeTracker) endpointsToEndpointsMap(endpoints *v1.Endpoint
 // apply the changes to EndpointsMap and updates stale endpoints and service-endpoints pair. The `staleEndpoints` argument
 // is passed in to store the stale udp endpoints and `staleServiceNames` argument is passed in to store the stale udp service.
 // The changes map is cleared after applying them.
-func (endpointsMap EndpointsMap) apply(changes *EndpointChangeTracker, staleEndpoints *[]ServiceEndpoint, staleServiceNames *[]ServicePortName) {
+// TODO(mmat): Update doc
+func (endpointsMap EndpointsMap) apply(changes *EndpointChangeTracker, staleEndpoints *[]ServiceEndpoint,
+	  staleServiceNames *[]ServicePortName, lastChangeTriggerTimes *[]time.Time) {
 	if changes == nil {
 		return
 	}
@@ -253,6 +271,10 @@ func (endpointsMap EndpointsMap) apply(changes *EndpointChangeTracker, staleEndp
 		detectStaleConnections(change.previous, change.current, staleEndpoints, staleServiceNames)
 	}
 	changes.items = make(map[types.NamespacedName]*endpointsChange)
+	for _, lastChangeTriggerTime := range changes.lastChangeTriggerTimes {
+		*lastChangeTriggerTimes = append(*lastChangeTriggerTimes, lastChangeTriggerTime)
+	}
+	changes.lastChangeTriggerTimes = make(map[types.NamespacedName]time.Time)
 }
 
 // Merge ensures that the current EndpointsMap contains all <service, endpoints> pairs from the EndpointsMap passed in.

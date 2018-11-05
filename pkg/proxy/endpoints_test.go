@@ -26,6 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"time"
 )
 
 func (proxier *FakeProxier) addEndpoints(endpoints *v1.Endpoints) {
@@ -123,6 +124,7 @@ func makeTestEndpoints(namespace, name string, eptFunc func(*v1.Endpoints)) *v1.
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
+			Annotations: make(map[string]string),
 		},
 	}
 	eptFunc(ept)
@@ -1266,6 +1268,55 @@ func TestUpdateEndpointsMap(t *testing.T) {
 			t.Errorf("[%d] expected healthchecks %v, got %v", tci, tc.expectedHealthchecks, result.HCEndpointsLocalIPSize)
 		}
 	}
+}
+
+func TestLastChangeTriggerTime(t *testing.T) {
+	t0 := time.Date(2018, 01, 01, 0, 0, 0, 0, time.UTC)
+	t1 := t0.Add(time.Second)
+	//t2 := t1.Add(time.Second)
+	//t3 := t2.Add(time.Second)
+	//t4 := t3.Add(time.Second)
+	//t5 := t4.Add(time.Second)
+
+	createEndpoints := func(namespace, name string, triggerTime time.Time) *v1.Endpoints {
+		e := makeTestEndpoints(namespace, name, func(ept *v1.Endpoints) {
+			ept.Subsets = []v1.EndpointSubset{{
+				Addresses: []v1.EndpointAddress{{IP: "1.1.1.1", }},
+				Ports: []v1.EndpointPort{{Port: 11, }},
+			}}
+		})
+		e.Annotations[v1.EndpointsLastChangeTriggerTime] = triggerTime.Format(time.RFC3339Nano)
+		return e
+	}
+
+	modifyEndpoints := func(endpoints *v1.Endpoints, triggerTime time.Time) *v1.Endpoints {
+		e := endpoints.DeepCopy();
+		e.Subsets[0].Ports[0].Port++
+		e.Annotations[v1.EndpointsLastChangeTriggerTime] = triggerTime.Format(time.RFC3339Nano)
+		return e;
+	}
+
+	fp := newFakeProxier()
+	fp.hostname = testHostname
+
+	e := createEndpoints("ns", "ep1", t0)
+	fp.addEndpoints(e)
+
+	result := UpdateEndpointsMap(fp.endpointsMap, fp.endpointsChanges)
+	expected := []time.Time{t0}
+	if !reflect.DeepEqual(result.LastChangeTriggerTimes, expected) {
+		t.Errorf("Invalid LastChangeTriggerTimes, expected: %v, got: %v",
+			expected, result.LastChangeTriggerTimes)
+	}
+
+	// TODO
+	e = modifyEndpoints(e, t1)
+
+	// TODO(mmat): Implement following tests
+	// 1. Single add
+	// 2. Add update
+	// 3. Multiple endpoints
+	// 4. Endpoints without annotation
 }
 
 func compareEndpointsMaps(t *testing.T, tci int, newMap EndpointsMap, expected map[ServicePortName][]*BaseEndpointInfo) {
