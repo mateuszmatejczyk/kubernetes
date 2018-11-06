@@ -1356,7 +1356,7 @@ func TestLastChangeTriggerTime(t *testing.T) {
 			expected: []time.Time{},
 		},
 		{
-			name: "add -> delete -> add",
+			name: "add then delete then add again",
 			scenario: func(fp *FakeProxier) {
 				e := createEndpoints("ns", "ep1", t1)
 				fp.addEndpoints(e)
