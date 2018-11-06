@@ -125,7 +125,6 @@ func makeTestEndpoints(namespace, name string, eptFunc func(*v1.Endpoints)) *v1.
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
-			Annotations: make(map[string]string),
 		},
 	}
 	eptFunc(ept)

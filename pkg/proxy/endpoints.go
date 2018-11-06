@@ -93,8 +93,8 @@ type EndpointChangeTracker struct {
 	// isIPv6Mode indicates if change tracker is under IPv6/IPv4 mode. Nil means not applicable.
 	isIPv6Mode *bool
 	recorder   record.EventRecorder
-	// Map from the Endpoints namespaced-name to the time of the trigger that caused that changed.
-	// Used to calculate the network-programming-latency.
+	// Map from the Endpoints namespaced-name to the time of the trigger that caused the endpoints
+	// object to change. Used to calculate the network-programming-latency.
 	lastChangeTriggerTimes map[types.NamespacedName]time.Time
 }
 
@@ -171,8 +171,8 @@ type UpdateEndpointMapResult struct {
 	StaleEndpoints []ServiceEndpoint
 	// StaleServiceNames identifies if a service is stale.
 	StaleServiceNames []ServicePortName
-	// List of trigger times for all endpoints that changed, used to export the network programming
-	// latency.
+	// List of the trigger times for all endpoints objects that changed. It's used to export the
+	// network programming latency.
 	LastChangeTriggerTimes []time.Time
 }
 
