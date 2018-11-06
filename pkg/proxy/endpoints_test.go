@@ -125,6 +125,7 @@ func makeTestEndpoints(namespace, name string, eptFunc func(*v1.Endpoints)) *v1.
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
+			Annotations: make(map[string]string),
 		},
 	}
 	eptFunc(ept)
@@ -1343,7 +1344,7 @@ func TestLastChangeTriggerTime(t *testing.T) {
 				delete(e.Annotations, v1.EndpointsLastChangeTriggerTime)
 				fp.addEndpoints(e)
 			},
-			expected: nil, // Empty slice
+			expected: []time.Time{},
 		},
 		{
 			name: "addEndpoints then deleteEndpoints",
@@ -1352,7 +1353,7 @@ func TestLastChangeTriggerTime(t *testing.T) {
 				fp.addEndpoints(e)
 				fp.deleteEndpoints(e)
 			},
-			expected: nil, // Empty slice
+			expected: []time.Time{},
 		},
 		{
 			name: "add -> delete -> add",

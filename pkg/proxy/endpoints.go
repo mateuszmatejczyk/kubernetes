@@ -180,6 +180,7 @@ type UpdateEndpointMapResult struct {
 func UpdateEndpointsMap(endpointsMap EndpointsMap, changes *EndpointChangeTracker) (result UpdateEndpointMapResult) {
 	result.StaleEndpoints = make([]ServiceEndpoint, 0)
 	result.StaleServiceNames = make([]ServicePortName, 0)
+	result.LastChangeTriggerTimes = make([]time.Time, 0)
 
 	endpointsMap.apply(
 		changes, &result.StaleEndpoints, &result.StaleServiceNames, &result.LastChangeTriggerTimes)
