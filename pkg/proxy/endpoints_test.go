@@ -27,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"time"
+	"sort"
 )
 
 func (proxier *FakeProxier) addEndpoints(endpoints *v1.Endpoints) {
@@ -1273,10 +1274,8 @@ func TestUpdateEndpointsMap(t *testing.T) {
 func TestLastChangeTriggerTime(t *testing.T) {
 	t0 := time.Date(2018, 01, 01, 0, 0, 0, 0, time.UTC)
 	t1 := t0.Add(time.Second)
-	//t2 := t1.Add(time.Second)
-	//t3 := t2.Add(time.Second)
-	//t4 := t3.Add(time.Second)
-	//t5 := t4.Add(time.Second)
+	t2 := t1.Add(time.Second)
+	t3 := t2.Add(time.Second)
 
 	createEndpoints := func(namespace, name string, triggerTime time.Time) *v1.Endpoints {
 		e := makeTestEndpoints(namespace, name, func(ept *v1.Endpoints) {
@@ -1296,27 +1295,94 @@ func TestLastChangeTriggerTime(t *testing.T) {
 		return e;
 	}
 
-	fp := newFakeProxier()
-	fp.hostname = testHostname
-
-	e := createEndpoints("ns", "ep1", t0)
-	fp.addEndpoints(e)
-
-	result := UpdateEndpointsMap(fp.endpointsMap, fp.endpointsChanges)
-	expected := []time.Time{t0}
-	if !reflect.DeepEqual(result.LastChangeTriggerTimes, expected) {
-		t.Errorf("Invalid LastChangeTriggerTimes, expected: %v, got: %v",
-			expected, result.LastChangeTriggerTimes)
+	sortTimeSlice := func(data []time.Time) {
+		sort.Slice(data, func (i,j int) bool { return data[i].Before(data[j])} )
 	}
 
-	// TODO
-	e = modifyEndpoints(e, t1)
+	testCases := []struct {
+		name string
+		scenario func(fp *FakeProxier)
+		expected     []time.Time
+	}{
+		{
+			name: "Single addEndpoints",
+			scenario: func(fp *FakeProxier) {
+				e := createEndpoints("ns", "ep1", t0)
+				fp.addEndpoints(e)
+			},
+			expected: []time.Time{t0},
+		},
+		{
+			name: "addEndpoints then updatedEndpoints",
+			scenario: func(fp *FakeProxier) {
+				e := createEndpoints("ns", "ep1", t0)
+				fp.addEndpoints(e)
 
-	// TODO(mmat): Implement following tests
-	// 1. Single add
-	// 2. Add update
-	// 3. Multiple endpoints
-	// 4. Endpoints without annotation
+				e1 := modifyEndpoints(e, t1)
+				fp.updateEndpoints(e, e1)
+			},
+			expected: []time.Time{t0},
+		},
+		{
+			name: "addEndpoints then updatedEndpoints",
+			scenario: func(fp *FakeProxier) {
+				e1 := createEndpoints("ns", "ep1", t1)
+				fp.addEndpoints(e1)
+
+				e2 := createEndpoints("ns", "ep2", t2)
+				fp.addEndpoints(e2)
+
+				e11 := modifyEndpoints(e1, t3)
+				fp.updateEndpoints(e1, e11)
+			},
+			expected: []time.Time{t1, t2},
+		},
+		{
+			name: "Endpoints without annotation set",
+			scenario: func(fp *FakeProxier) {
+				e := createEndpoints("ns", "ep1", t1)
+				delete(e.Annotations, v1.EndpointsLastChangeTriggerTime)
+				fp.addEndpoints(e)
+			},
+			expected: nil, // Empty slice
+		},
+		{
+			name: "addEndpoints then deleteEndpoints",
+			scenario: func(fp *FakeProxier) {
+				e := createEndpoints("ns", "ep1", t1)
+				fp.addEndpoints(e)
+				fp.deleteEndpoints(e)
+			},
+			expected: nil, // Empty slice
+		},
+		{
+			name: "add -> delete -> add",
+			scenario: func(fp *FakeProxier) {
+				e := createEndpoints("ns", "ep1", t1)
+				fp.addEndpoints(e)
+				fp.deleteEndpoints(e)
+				e = modifyEndpoints(e, t2)
+				fp.addEndpoints(e)
+			},
+			expected: []time.Time{t2},
+		},
+	}
+
+	for _, tc := range testCases {
+		fp := newFakeProxier()
+
+		tc.scenario(fp)
+
+		result := UpdateEndpointsMap(fp.endpointsMap, fp.endpointsChanges)
+		got := result.LastChangeTriggerTimes
+		sortTimeSlice(got)
+		sortTimeSlice(tc.expected)
+
+		if !reflect.DeepEqual(got, tc.expected) {
+			t.Errorf("%s: Invalid LastChangeTriggerTimes, expected: %v, got: %v",
+				tc.name, tc.expected, result.LastChangeTriggerTimes)
+		}
+	}
 }
 
 func compareEndpointsMaps(t *testing.T, tci int, newMap EndpointsMap, expected map[ServicePortName][]*BaseEndpointInfo) {

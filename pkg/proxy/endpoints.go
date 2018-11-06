@@ -93,7 +93,8 @@ type EndpointChangeTracker struct {
 	// isIPv6Mode indicates if change tracker is under IPv6/IPv4 mode. Nil means not applicable.
 	isIPv6Mode *bool
 	recorder   record.EventRecorder
-	// TODO(document)
+	// Map from the Endpoints namespaced-name to the time of the trigger that caused that changed.
+	// Used to calculate the network-programming-latency.
 	lastChangeTriggerTimes map[types.NamespacedName]time.Time
 }
 
@@ -170,7 +171,8 @@ type UpdateEndpointMapResult struct {
 	StaleEndpoints []ServiceEndpoint
 	// StaleServiceNames identifies if a service is stale.
 	StaleServiceNames []ServicePortName
-	// TODO(mmat): Document
+	// List of trigger times for all endpoints that changed, used to export the network programming
+	// latency.
 	LastChangeTriggerTimes []time.Time
 }
 
@@ -257,7 +259,8 @@ func (ect *EndpointChangeTracker) endpointsToEndpointsMap(endpoints *v1.Endpoint
 // apply the changes to EndpointsMap and updates stale endpoints and service-endpoints pair. The `staleEndpoints` argument
 // is passed in to store the stale udp endpoints and `staleServiceNames` argument is passed in to store the stale udp service.
 // The changes map is cleared after applying them.
-// TODO(mmat): Update doc
+// In addition it returns (via argument) and resets the lastChangeTriggerTimes for all endpoints
+// that were changed and will result in syncing the proxy rules.
 func (endpointsMap EndpointsMap) apply(changes *EndpointChangeTracker, staleEndpoints *[]ServiceEndpoint,
 	  staleServiceNames *[]ServicePortName, lastChangeTriggerTimes *[]time.Time) {
 	if changes == nil {

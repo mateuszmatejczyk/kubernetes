@@ -1170,6 +1170,10 @@ func (proxier *Proxier) syncProxyRules() {
 		utilproxy.RevertPorts(replacementPortsMap, proxier.portsMap)
 		return
 	}
+	for _, lastChangeTriggerTime := range endpointUpdateResult.LastChangeTriggerTimes {
+		metrics.NetworkProgrammingLatency.Observe(metrics.SinceInMicroseconds(lastChangeTriggerTime))
+		glog.Infof("Network programming took %v", metrics.SinceInMicroseconds(lastChangeTriggerTime))
+	}
 
 	// Close old local ports and save new ones.
 	for k, v := range proxier.portsMap {

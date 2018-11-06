@@ -51,10 +51,11 @@ var (
 
 var registerMetricsOnce sync.Once
 
-// RegisterMetrics registers sync proxy rules latency metrics
+// RegisterMetrics registers kube-proxy metrics.
 func RegisterMetrics() {
 	registerMetricsOnce.Do(func() {
 		prometheus.MustRegister(SyncProxyRulesLatency)
+		prometheus.MustRegister(NetworkProgrammingLatency)
 	})
 }
 
