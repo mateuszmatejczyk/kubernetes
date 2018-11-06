@@ -38,7 +38,7 @@ var (
 
 	// NetworkProgrammingLatency is defined as the time it took to program the network - from the time
 	// the service or pod has changed to the time the change was propagated and the proper kube-proxy
-	// rules were synced.
+	// rules were synced. Exported for each endpoints object that were part of the rules sync.
 	// See https://github.com/kubernetes/community/blob/master/sig-scalability/slos/network_programming_latency.md
 	NetworkProgrammingLatency = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
