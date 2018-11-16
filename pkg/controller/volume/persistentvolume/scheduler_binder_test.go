@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/glog"
+	"k8s.io/klog"
 
 	"k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -30,7 +30,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/diff"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/informers"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
@@ -728,10 +727,6 @@ func TestFindPodVolumesWithoutProvisioning(t *testing.T) {
 		},
 	}
 
-	// Set feature gate
-	utilfeature.DefaultFeatureGate.Set("VolumeScheduling=true")
-	defer utilfeature.DefaultFeatureGate.Set("VolumeScheduling=false")
-
 	testNode := &v1.Node{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "node1",
@@ -742,7 +737,7 @@ func TestFindPodVolumesWithoutProvisioning(t *testing.T) {
 	}
 
 	for name, scenario := range scenarios {
-		glog.V(5).Infof("Running test case %q", name)
+		klog.V(5).Infof("Running test case %q", name)
 
 		// Setup
 		testEnv := newTestBinder(t)
@@ -843,10 +838,6 @@ func TestFindPodVolumesWithProvisioning(t *testing.T) {
 			expectedBound:   true,
 		},
 	}
-
-	// Set VolumeScheduling feature gate
-	utilfeature.DefaultFeatureGate.Set("VolumeScheduling=true")
-	defer utilfeature.DefaultFeatureGate.Set("VolumeScheduling=false")
 
 	testNode := &v1.Node{
 		ObjectMeta: metav1.ObjectMeta{
@@ -964,7 +955,7 @@ func TestAssumePodVolumes(t *testing.T) {
 	}
 
 	for name, scenario := range scenarios {
-		glog.V(5).Infof("Running test case %q", name)
+		klog.V(5).Infof("Running test case %q", name)
 
 		// Setup
 		testEnv := newTestBinder(t)
@@ -1094,7 +1085,7 @@ func TestBindAPIUpdate(t *testing.T) {
 		},
 	}
 	for name, scenario := range scenarios {
-		glog.V(4).Infof("Running test case %q", name)
+		klog.V(4).Infof("Running test case %q", name)
 
 		// Setup
 		testEnv := newTestBinder(t)
@@ -1253,7 +1244,7 @@ func TestCheckBindings(t *testing.T) {
 	}
 
 	for name, scenario := range scenarios {
-		glog.V(4).Infof("Running test case %q", name)
+		klog.V(4).Infof("Running test case %q", name)
 
 		// Setup
 		pod := makePod(nil)
@@ -1386,7 +1377,7 @@ func TestBindPodVolumes(t *testing.T) {
 	}
 
 	for name, scenario := range scenarios {
-		glog.V(4).Infof("Running test case %q", name)
+		klog.V(4).Infof("Running test case %q", name)
 
 		// Setup
 		pod := makePod(nil)
@@ -1407,7 +1398,7 @@ func TestBindPodVolumes(t *testing.T) {
 		if scenario.delayFunc != nil {
 			go func() {
 				time.Sleep(5 * time.Second)
-				glog.V(5).Infof("Running delay function")
+				klog.V(5).Infof("Running delay function")
 				scenario.delayFunc(t, testEnv, pod, scenario.binding.pv, scenario.binding.pvc)
 			}()
 		}
@@ -1426,10 +1417,6 @@ func TestBindPodVolumes(t *testing.T) {
 }
 
 func TestFindAssumeVolumes(t *testing.T) {
-	// Set feature gate
-	utilfeature.DefaultFeatureGate.Set("VolumeScheduling=true")
-	defer utilfeature.DefaultFeatureGate.Set("VolumeScheduling=false")
-
 	// Test case
 	podPVCs := []*v1.PersistentVolumeClaim{unboundPVC}
 	pvs := []*v1.PersistentVolume{pvNode2, pvNode1a, pvNode1c}
