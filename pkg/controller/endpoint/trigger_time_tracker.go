@@ -19,7 +19,8 @@ package endpoint
 import (
 	"time"
 	"sync"
-	"github.com/golang/glog"
+
+	"k8s.io/klog"
 )
 
 /*
@@ -102,7 +103,7 @@ func (this *triggerTimeTracker) observe(key string, triggerTime time.Time) {
 		if triggerTime.Before(this.lastSyncMinTriggerTime[key]) {
 			// Oops, we exported a wrong time in the last processing. Increment the error counter.
  			LastChangeTriggerTimeMiscalculated.Inc()
-			glog.Warningf("Miscalculated LastChangeTriggerTime annotation. " +
+			klog.Warningf("Miscalculated LastChangeTriggerTime annotation. " +
 				"Should export: %s, exported %s", triggerTime, this.lastSyncMinTriggerTime[key])
 
 			// Correct the lastSyncMinTriggerTime so we don't increment the error again for the same
