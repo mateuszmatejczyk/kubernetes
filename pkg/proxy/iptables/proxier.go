@@ -1340,7 +1340,7 @@ func (proxier *Proxier) syncProxyRules() {
 	}
 	for _, lastChangeTriggerTime := range endpointUpdateResult.LastChangeTriggerTimes {
 		metrics.NetworkProgrammingLatency.Observe(metrics.SinceInMicroseconds(lastChangeTriggerTime))
-		glog.Infof("Network programming took %v", metrics.SinceInMicroseconds(lastChangeTriggerTime))
+		klog.Infof("Network programming took %v", metrics.SinceInMicroseconds(lastChangeTriggerTime))
 	}
 
 	// Close old local ports and save new ones.
