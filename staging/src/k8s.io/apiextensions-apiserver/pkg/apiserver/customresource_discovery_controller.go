@@ -21,7 +21,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/golang/glog"
+	"k8s.io/klog"
 
 	autoscaling "k8s.io/api/autoscaling/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,12 +31,16 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/version"
 	"k8s.io/apiserver/pkg/endpoints/discovery"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
+	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	informers "k8s.io/apiextensions-apiserver/pkg/client/informers/internalversion/apiextensions/internalversion"
 	listers "k8s.io/apiextensions-apiserver/pkg/client/listers/apiextensions/internalversion"
+	apiextensionsfeatures "k8s.io/apiextensions-apiserver/pkg/features"
+	apiextensionsopenapi "k8s.io/apiextensions-apiserver/pkg/openapi"
 )
 
 type DiscoveryController struct {
@@ -50,6 +54,8 @@ type DiscoveryController struct {
 	syncFn func(version schema.GroupVersion) error
 
 	queue workqueue.RateLimitingInterface
+
+	openAPIAggregationManager apiextensionsopenapi.AggregationManager
 }
 
 func NewDiscoveryController(crdInformer informers.CustomResourceDefinitionInformer, versionHandler *versionDiscoveryHandler, groupHandler *groupDiscoveryHandler) *DiscoveryController {
@@ -83,6 +89,7 @@ func (c *DiscoveryController) sync(version schema.GroupVersion) error {
 	if err != nil {
 		return err
 	}
+	apiServiceName := version.Group + "." + version.Version
 	foundVersion := false
 	foundGroup := false
 	for _, crd := range crds {
@@ -119,6 +126,33 @@ func (c *DiscoveryController) sync(version schema.GroupVersion) error {
 			continue
 		}
 		foundVersion = true
+		if c.openAPIAggregationManager != nil && utilfeature.DefaultFeatureGate.Enabled(apiextensionsfeatures.CustomResourceValidation) {
+			validationSchema, err := getSchemaForVersion(crd, version.Version)
+			if err != nil {
+				return err
+			}
+			// Convert internal CustomResourceValidation to versioned CustomResourceValidation
+			versionedSchema := new(v1beta1.CustomResourceValidation)
+			if validationSchema == nil {
+				versionedSchema = nil
+			} else {
+				if err := v1beta1.Convert_apiextensions_CustomResourceValidation_To_v1beta1_CustomResourceValidation(validationSchema, versionedSchema, nil); err != nil {
+					return err
+				}
+			}
+			// We aggregate the schema even if it's nil as it maybe a removal of the schema for this CRD,
+			// and the aggreated OpenAPI spec should reflect this change.
+			crdspec, etag, err := apiextensionsopenapi.CustomResourceDefinitionOpenAPISpec(&crd.Spec, version.Version, versionedSchema)
+			if err != nil {
+				return err
+			}
+
+			// Add/update the local API service's spec for the CRD in apiExtensionsServer's
+			// openAPIAggregationManager
+			if err := c.openAPIAggregationManager.AddUpdateLocalAPIServiceSpec(apiServiceName, crdspec, etag); err != nil {
+				return err
+			}
+		}
 
 		verbs := metav1.Verbs([]string{"delete", "deletecollection", "get", "list", "patch", "create", "update", "watch"})
 		// if we're terminating we don't allow some verbs
@@ -136,7 +170,11 @@ func (c *DiscoveryController) sync(version schema.GroupVersion) error {
 			Categories:   crd.Status.AcceptedNames.Categories,
 		})
 
-		if crd.Spec.Subresources != nil && crd.Spec.Subresources.Status != nil {
+		subresources, err := getSubresourcesForVersion(crd, version.Version)
+		if err != nil {
+			return err
+		}
+		if subresources != nil && subresources.Status != nil {
 			apiResourcesForDiscovery = append(apiResourcesForDiscovery, metav1.APIResource{
 				Name:       crd.Status.AcceptedNames.Plural + "/status",
 				Namespaced: crd.Spec.Scope == apiextensions.NamespaceScoped,
@@ -145,7 +183,7 @@ func (c *DiscoveryController) sync(version schema.GroupVersion) error {
 			})
 		}
 
-		if crd.Spec.Subresources != nil && crd.Spec.Subresources.Scale != nil {
+		if subresources != nil && subresources.Scale != nil {
 			apiResourcesForDiscovery = append(apiResourcesForDiscovery, metav1.APIResource{
 				Group:      autoscaling.GroupName,
 				Version:    "v1",
@@ -160,6 +198,14 @@ func (c *DiscoveryController) sync(version schema.GroupVersion) error {
 	if !foundGroup {
 		c.groupHandler.unsetDiscovery(version.Group)
 		c.versionHandler.unsetDiscovery(version)
+		if c.openAPIAggregationManager != nil && utilfeature.DefaultFeatureGate.Enabled(apiextensionsfeatures.CustomResourceValidation) {
+			// Remove the local API service for the CRD in apiExtensionsServer's
+			// openAPIAggregationManager.
+			// Note that we don't check if apiServiceName exists in openAPIAggregationManager
+			// because RemoveAPIServiceSpec properly handles non-existing API service by
+			// returning no error.
+			return c.openAPIAggregationManager.RemoveAPIServiceSpec(apiServiceName)
+		}
 		return nil
 	}
 
@@ -176,6 +222,14 @@ func (c *DiscoveryController) sync(version schema.GroupVersion) error {
 
 	if !foundVersion {
 		c.versionHandler.unsetDiscovery(version)
+		if c.openAPIAggregationManager != nil && utilfeature.DefaultFeatureGate.Enabled(apiextensionsfeatures.CustomResourceValidation) {
+			// Remove the local API service for the CRD in apiExtensionsServer's
+			// openAPIAggregationManager.
+			// Note that we don't check if apiServiceName exists in openAPIAggregationManager
+			// because RemoveAPIServiceSpec properly handles non-existing API service by
+			// returning no error.
+			return c.openAPIAggregationManager.RemoveAPIServiceSpec(apiServiceName)
+		}
 		return nil
 	}
 	c.versionHandler.setDiscovery(version, discovery.NewAPIVersionHandler(Codecs, version, discovery.APIResourceListerFunc(func() []metav1.APIResource {
@@ -191,12 +245,14 @@ func sortGroupDiscoveryByKubeAwareVersion(gd []metav1.GroupVersionForDiscovery) 
 	})
 }
 
-func (c *DiscoveryController) Run(stopCh <-chan struct{}) {
+func (c *DiscoveryController) Run(stopCh <-chan struct{}, crdOpenAPIAggregationManager apiextensionsopenapi.AggregationManager) {
 	defer utilruntime.HandleCrash()
 	defer c.queue.ShutDown()
-	defer glog.Infof("Shutting down DiscoveryController")
+	defer klog.Infof("Shutting down DiscoveryController")
 
-	glog.Infof("Starting DiscoveryController")
+	klog.Infof("Starting DiscoveryController")
+
+	c.openAPIAggregationManager = crdOpenAPIAggregationManager
 
 	if !cache.WaitForCacheSync(stopCh, c.crdsSynced) {
 		utilruntime.HandleError(fmt.Errorf("timed out waiting for caches to sync"))
@@ -242,14 +298,14 @@ func (c *DiscoveryController) enqueue(obj *apiextensions.CustomResourceDefinitio
 
 func (c *DiscoveryController) addCustomResourceDefinition(obj interface{}) {
 	castObj := obj.(*apiextensions.CustomResourceDefinition)
-	glog.V(4).Infof("Adding customresourcedefinition %s", castObj.Name)
+	klog.V(4).Infof("Adding customresourcedefinition %s", castObj.Name)
 	c.enqueue(castObj)
 }
 
 func (c *DiscoveryController) updateCustomResourceDefinition(oldObj, newObj interface{}) {
 	castNewObj := newObj.(*apiextensions.CustomResourceDefinition)
 	castOldObj := oldObj.(*apiextensions.CustomResourceDefinition)
-	glog.V(4).Infof("Updating customresourcedefinition %s", castOldObj.Name)
+	klog.V(4).Infof("Updating customresourcedefinition %s", castOldObj.Name)
 	// Enqueue both old and new object to make sure we remove and add appropriate Versions.
 	// The working queue will resolve any duplicates and only changes will stay in the queue.
 	c.enqueue(castNewObj)
@@ -261,15 +317,15 @@ func (c *DiscoveryController) deleteCustomResourceDefinition(obj interface{}) {
 	if !ok {
 		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
 		if !ok {
-			glog.Errorf("Couldn't get object from tombstone %#v", obj)
+			klog.Errorf("Couldn't get object from tombstone %#v", obj)
 			return
 		}
 		castObj, ok = tombstone.Obj.(*apiextensions.CustomResourceDefinition)
 		if !ok {
-			glog.Errorf("Tombstone contained object that is not expected %#v", obj)
+			klog.Errorf("Tombstone contained object that is not expected %#v", obj)
 			return
 		}
 	}
-	glog.V(4).Infof("Deleting customresourcedefinition %q", castObj.Name)
+	klog.V(4).Infof("Deleting customresourcedefinition %q", castObj.Name)
 	c.enqueue(castObj)
 }

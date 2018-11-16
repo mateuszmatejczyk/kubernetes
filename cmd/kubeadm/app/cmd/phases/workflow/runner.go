@@ -53,15 +53,19 @@ type Runner struct {
 
 	// runDataInitializer defines a function that creates the runtime data shared
 	// among all the phases included in the workflow
-	runDataInitializer func() (RunData, error)
+	runDataInitializer func(*cobra.Command) (RunData, error)
 
 	// runData is part of the internal state of the runner and it is used for implementing
 	// a singleton in the InitData methods (thus avoiding to initialize data
 	// more than one time)
 	runData RunData
 
-	// cmdAdditionalFlags holds additional flags that could be added to the subcommands generated
-	// for each phase. Flags could be inherited from the parent command too
+	// runCmd is part of the internal state of the runner and it is used to track the
+	// command that will trigger the runner (only if the runner is BindToCommand).
+	runCmd *cobra.Command
+
+	// cmdAdditionalFlags holds additional, shared flags that could be added to the subcommands generated
+	// for phases. Flags could be inherited from the parent command too or added directly to each phase
 	cmdAdditionalFlags *pflag.FlagSet
 
 	// phaseRunners is part of the internal state of the runner and provides
@@ -166,7 +170,8 @@ func (e *Runner) computePhaseRunFlags() (map[string]bool, error) {
 
 // SetDataInitializer allows to setup a function that initialize the runtime data shared
 // among all the phases included in the workflow.
-func (e *Runner) SetDataInitializer(builder func() (RunData, error)) {
+// The method will receive in input the cmd that triggers the Runner (only if the runner is BindToCommand)
+func (e *Runner) SetDataInitializer(builder func(cmd *cobra.Command) (RunData, error)) {
 	e.runDataInitializer = builder
 }
 
@@ -176,7 +181,7 @@ func (e *Runner) SetDataInitializer(builder func() (RunData, error)) {
 func (e *Runner) InitData() (RunData, error) {
 	if e.runData == nil && e.runDataInitializer != nil {
 		var err error
-		if e.runData, err = e.runDataInitializer(); err != nil {
+		if e.runData, err = e.runDataInitializer(e.runCmd); err != nil {
 			return nil, err
 		}
 	}
@@ -250,7 +255,7 @@ func (e *Runner) Help(cmdUse string) string {
 
 	// prints the list of phases indented by level and formatted using the maxlength
 	// the list is enclosed in a mardown code block for ensuring better readability in the public web site
-	line := fmt.Sprintf("The %q command executes the following internal workflow:\n", cmdUse)
+	line := fmt.Sprintf("The %q command executes the following phases:\n", cmdUse)
 	line += "```\n"
 	offset := 2
 	e.visitAll(func(p *phaseRunner) error {
@@ -269,10 +274,11 @@ func (e *Runner) Help(cmdUse string) string {
 	return line
 }
 
-// SetPhaseSubcommandsAdditionalFlags allows to define flags to be added
+// SetAdditionalFlags allows to define flags to be added
 // to the subcommands generated for each phase (but not existing in the parent command).
 // Please note that this command needs to be done before BindToCommand.
-func (e *Runner) SetPhaseSubcommandsAdditionalFlags(fn func(*pflag.FlagSet)) {
+// Nb. if a flag is used only by one phase, please consider using phase LocalFlags.
+func (e *Runner) SetAdditionalFlags(fn func(*pflag.FlagSet)) {
 	// creates a new NewFlagSet
 	e.cmdAdditionalFlags = pflag.NewFlagSet("phaseAdditionalFlags", pflag.ContinueOnError)
 	// invokes the function that sets additional flags
@@ -301,13 +307,21 @@ func (e *Runner) BindToCommand(cmd *cobra.Command) {
 	// generate all the nested subcommands for invoking single phases
 	subcommands := map[string]*cobra.Command{}
 	e.visitAll(func(p *phaseRunner) error {
+		// skip hidden phases
+		if p.Hidden {
+			return nil
+		}
+
 		// creates nested phase subcommand
 		var phaseCmd = &cobra.Command{
 			Use:     strings.ToLower(p.Name),
 			Short:   p.Short,
 			Long:    p.Long,
 			Example: p.Example,
+			Aliases: p.Aliases,
 			Run: func(cmd *cobra.Command, args []string) {
+				// overrides the command triggering the Runner using the phaseCmd
+				e.runCmd = cmd
 				e.Options.FilterPhases = []string{p.generatedName}
 				if err := e.Run(); err != nil {
 					fmt.Fprintln(os.Stderr, err)
@@ -319,11 +333,18 @@ func (e *Runner) BindToCommand(cmd *cobra.Command) {
 
 		// makes the new command inherits local flags from the parent command
 		// Nb. global flags will be inherited automatically
-		inheritsFlags(cmd.Flags(), phaseCmd.Flags(), p.CmdFlags)
+		inheritsFlags(cmd.Flags(), phaseCmd.Flags(), p.InheritFlags)
 
-		// If defined, additional flags for phases should be added as well
+		// makes the new command inherits additional flags for phases
 		if e.cmdAdditionalFlags != nil {
-			inheritsFlags(e.cmdAdditionalFlags, phaseCmd.Flags(), p.CmdFlags)
+			inheritsFlags(e.cmdAdditionalFlags, phaseCmd.Flags(), p.InheritFlags)
+		}
+
+		// If defined, added phase local flags
+		if p.LocalFlags != nil {
+			p.LocalFlags.VisitAll(func(f *pflag.Flag) {
+				phaseCmd.Flags().AddFlag(f)
+			})
 		}
 
 		// adds the command to parent
@@ -346,6 +367,9 @@ func (e *Runner) BindToCommand(cmd *cobra.Command) {
 
 	// adds phase related flags to the main command
 	cmd.Flags().StringSliceVar(&e.Options.SkipPhases, "skip-phases", nil, "List of phases to be skipped")
+
+	// keep tracks of the command triggering the runner
+	e.runCmd = cmd
 }
 
 func inheritsFlags(sourceFlags, targetFlags *pflag.FlagSet, cmdFlags []string) {

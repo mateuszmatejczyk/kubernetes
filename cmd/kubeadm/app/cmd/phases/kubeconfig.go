@@ -1,5 +1,5 @@
 /*
-Copyright 2017 The Kubernetes Authors.
+Copyright 2018 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -83,19 +83,19 @@ func NewKubeConfigPhase() workflow.Phase {
 			NewKubeConfigFilePhase(kubeadmconstants.ControllerManagerKubeConfigFileName),
 			NewKubeConfigFilePhase(kubeadmconstants.SchedulerKubeConfigFileName),
 		},
-		Run:      runKubeConfig,
-		CmdFlags: getKubeConfigPhaseFlags("all"),
+		Run:          runKubeConfig,
+		InheritFlags: getKubeConfigPhaseFlags("all"),
 	}
 }
 
 // NewKubeConfigFilePhase creates a kubeadm workflow phase that creates a kubeconfig file.
 func NewKubeConfigFilePhase(kubeConfigFileName string) workflow.Phase {
 	return workflow.Phase{
-		Name:     kubeconfigFilePhaseProperties[kubeConfigFileName].name,
-		Short:    kubeconfigFilePhaseProperties[kubeConfigFileName].short,
-		Long:     fmt.Sprintf(kubeconfigFilePhaseProperties[kubeConfigFileName].long, kubeConfigFileName),
-		Run:      runKubeConfigFile(kubeConfigFileName),
-		CmdFlags: getKubeConfigPhaseFlags(kubeConfigFileName),
+		Name:         kubeconfigFilePhaseProperties[kubeConfigFileName].name,
+		Short:        kubeconfigFilePhaseProperties[kubeConfigFileName].short,
+		Long:         fmt.Sprintf(kubeconfigFilePhaseProperties[kubeConfigFileName].long, kubeConfigFileName),
+		Run:          runKubeConfigFile(kubeConfigFileName),
+		InheritFlags: getKubeConfigPhaseFlags(kubeConfigFileName),
 	}
 }
 
@@ -135,7 +135,6 @@ func runKubeConfigFile(kubeConfigFileName string) func(workflow.RunData) error {
 
 		// if external CA mode, skip certificate authority generation
 		if data.ExternalCA() {
-			//TODO: implement validation of existing kubeconfig files
 			fmt.Printf("[kubeconfig] External CA mode: Using user provided %s\n", kubeConfigFileName)
 			return nil
 		}
