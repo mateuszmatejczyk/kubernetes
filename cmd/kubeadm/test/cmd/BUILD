@@ -33,8 +33,11 @@ go_test(
         "skip",
     ],
     deps = [
-        "//vendor/github.com/ghodss/yaml:go_default_library",
+        "//cmd/kubeadm/app/phases/certs:go_default_library",
+        "//cmd/kubeadm/app/util/pkiutil:go_default_library",
+        "//cmd/kubeadm/test:go_default_library",
         "//vendor/github.com/renstrom/dedent:go_default_library",
+        "//vendor/sigs.k8s.io/yaml:go_default_library",
     ],
 )
 

@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/go-openapi/spec"
-	"github.com/golang/glog"
+	"k8s.io/klog"
 
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -49,6 +49,9 @@ type AggregationManager interface {
 	UpdateAPIServiceSpec(apiServiceName string, spec *spec.Swagger, etag string) error
 	RemoveAPIServiceSpec(apiServiceName string) error
 	GetAPIServiceInfo(apiServiceName string) (handler http.Handler, etag string, exists bool)
+
+	// GetAPIServicesName returns the names of APIServices recorded in AggregationManager.
+	GetAPIServiceNames() []string
 }
 
 // AggregationController periodically check for changes in OpenAPI specs of APIServices and update/remove
@@ -72,6 +75,18 @@ func NewAggregationController(downloader *Downloader, openAPIAggregationManager 
 	}
 
 	c.syncHandler = c.sync
+	// During initialization, openAPIAggregationManager only has record of local APIServices. There must be
+	// no aggregated APIService recorded, because aggregated APIServices only get added to openAPIAggregationManager
+	// by calling AggregationController.AddAPIService or AggregationController.UpdateAPIService after the
+	// controller is initialized.
+	// Here we add delegation target API services to queue, to periodically sync dynamic OpenAPI spec from
+	// delegation target.
+	// NOTE: openAPIAggregationManager.GetAPIServiceNames() will also return the APIService of non-name spec
+	// for aggregator, which has no http.Handler. The first time sync (when popping off from queue) for
+	// this APIService will be a no-op, and the controller will drop the APIService from queue.
+	for _, name := range openAPIAggregationManager.GetAPIServiceNames() {
+		c.queue.AddAfter(name, time.Second)
+	}
 
 	return c
 }
@@ -81,8 +96,8 @@ func (c *AggregationController) Run(stopCh <-chan struct{}) {
 	defer utilruntime.HandleCrash()
 	defer c.queue.ShutDown()
 
-	glog.Infof("Starting OpenAPI AggregationController")
-	defer glog.Infof("Shutting down OpenAPI AggregationController")
+	klog.Infof("Starting OpenAPI AggregationController")
+	defer klog.Infof("Shutting down OpenAPI AggregationController")
 
 	go wait.Until(c.runWorker, time.Second, stopCh)
 
@@ -102,7 +117,7 @@ func (c *AggregationController) processNextWorkItem() bool {
 		return false
 	}
 
-	glog.Infof("OpenAPI AggregationController: Processing item %s", key)
+	klog.Infof("OpenAPI AggregationController: Processing item %s", key)
 
 	action, err := c.syncHandler(key.(string))
 	if err == nil {
@@ -113,13 +128,13 @@ func (c *AggregationController) processNextWorkItem() bool {
 
 	switch action {
 	case syncRequeue:
-		glog.Infof("OpenAPI AggregationController: action for item %s: Requeue.", key)
+		klog.Infof("OpenAPI AggregationController: action for item %s: Requeue.", key)
 		c.queue.AddAfter(key, successfulUpdateDelay)
 	case syncRequeueRateLimited:
-		glog.Infof("OpenAPI AggregationController: action for item %s: Rate Limited Requeue.", key)
+		klog.Infof("OpenAPI AggregationController: action for item %s: Rate Limited Requeue.", key)
 		c.queue.AddRateLimited(key)
 	case syncNothing:
-		glog.Infof("OpenAPI AggregationController: action for item %s: Nothing (removed from the queue).", key)
+		klog.Infof("OpenAPI AggregationController: action for item %s: Nothing (removed from the queue).", key)
 	}
 
 	return true
