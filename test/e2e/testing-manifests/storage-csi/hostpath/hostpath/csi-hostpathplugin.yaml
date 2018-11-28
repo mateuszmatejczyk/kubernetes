@@ -15,7 +15,7 @@ spec:
       hostNetwork: true
       containers:
         - name: driver-registrar
-          image: gcr.io/gke-release/csi-driver-registrar:v1.0.0-gke.0
+          image: gcr.io/gke-release/csi-driver-registrar:v1.0.1-gke.0
           args:
             - --v=5
             - --csi-address=/csi/csi.sock
@@ -55,6 +55,8 @@ spec:
             - mountPath: /var/lib/kubelet/pods
               mountPropagation: Bidirectional
               name: mountpoint-dir
+            - mountPath: /tmp
+              name: tmp
       volumes:
         - hostPath:
             path: /var/lib/kubelet/plugins/csi-hostpath
@@ -65,6 +67,10 @@ spec:
             type: DirectoryOrCreate
           name: mountpoint-dir
         - hostPath:
-            path: /var/lib/kubelet/plugins
+            path: /var/lib/kubelet/plugins_registry
             type: Directory
           name: registration-dir
+        - name: tmp
+          hostPath:
+            path: /tmp
+            type: Directory

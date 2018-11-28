@@ -2,10 +2,15 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "go_default_library",
-    srcs = ["inotify_linux.go"],
-    importmap = "k8s.io/kubernetes/vendor/golang.org/x/exp/inotify",
-    importpath = "golang.org/x/exp/inotify",
+    srcs = ["csi.pb.go"],
+    importpath = "k8s.io/kubernetes/pkg/volume/csi/csiv0",
     visibility = ["//visibility:public"],
+    deps = [
+        "//vendor/github.com/golang/protobuf/proto:go_default_library",
+        "//vendor/github.com/golang/protobuf/ptypes/wrappers:go_default_library",
+        "//vendor/golang.org/x/net/context:go_default_library",
+        "//vendor/google.golang.org/grpc:go_default_library",
+    ],
 )
 
 filegroup(

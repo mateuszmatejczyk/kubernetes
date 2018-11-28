@@ -400,6 +400,10 @@ func (sched *Scheduler) bindVolumes(assumed *v1.Pod) error {
 			klog.Errorf("scheduler cache ForgetPod failed: %v", forgetErr)
 		}
 
+		// Volumes may be bound by PV controller asynchronously, we must clear
+		// stale pod binding cache.
+		sched.config.VolumeBinder.DeletePodBindings(assumed)
+
 		reason = "VolumeBindingFailed"
 		eventType = v1.EventTypeWarning
 		sched.config.Error(assumed, err)
@@ -446,6 +450,10 @@ func (sched *Scheduler) assume(assumed *v1.Pod, host string) error {
 			Message: err.Error(),
 		})
 		return err
+	}
+	// if "assumed" is a nominated pod, we should remove it from internal cache
+	if sched.config.SchedulingQueue != nil {
+		sched.config.SchedulingQueue.DeleteNominatedPodIfExists(assumed)
 	}
 
 	// Optimistically assume that the binding will succeed, so we need to invalidate affected

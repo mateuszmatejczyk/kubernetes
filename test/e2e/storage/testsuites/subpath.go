@@ -587,8 +587,6 @@ func testPodFailSubpathError(f *framework.Framework, pod *v1.Pod, errorMsg strin
 	defer func() {
 		framework.DeletePodWithWait(f, f.ClientSet, pod)
 	}()
-	err = framework.WaitForPodRunningInNamespace(f.ClientSet, pod)
-	Expect(err).To(HaveOccurred(), "while waiting for pod to be running")
 
 	By("Checking for subpath error event")
 	selector := fields.Set{
@@ -597,7 +595,7 @@ func testPodFailSubpathError(f *framework.Framework, pod *v1.Pod, errorMsg strin
 		"involvedObject.namespace": f.Namespace.Name,
 		"reason":                   "Failed",
 	}.AsSelector().String()
-	err = framework.WaitTimeoutForPodEvent(f.ClientSet, pod.Name, f.Namespace.Name, selector, errorMsg, framework.PodEventTimeout)
+	err = framework.WaitTimeoutForPodEvent(f.ClientSet, pod.Name, f.Namespace.Name, selector, errorMsg, framework.PodStartTimeout)
 	Expect(err).NotTo(HaveOccurred(), "while waiting for failed event to occur")
 }
 
