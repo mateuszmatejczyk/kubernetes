@@ -32,7 +32,7 @@ var (
 			Subsystem: kubeProxySubsystem,
 			Name:      "sync_proxy_rules_latency_microseconds",
 			Help:      "SyncProxyRules latency",
-			Buckets:   prometheus.ExponentialBuckets(1000, 2, 15),
+			Buckets:   prometheus.ExponentiaqlBuckets(1000, 2, 15),
 		},
 	)
 
@@ -44,6 +44,7 @@ var (
 		prometheus.HistogramOpts{
 			Subsystem: kubeProxySubsystem,
 			Name:      "network_programming_latency_microseconds",
+			Help:      "In Cluster Network Programming Latency (microseconds)",
 			Buckets:   prometheus.ExponentialBuckets(1000, 2, 15),
 		},
 	)
