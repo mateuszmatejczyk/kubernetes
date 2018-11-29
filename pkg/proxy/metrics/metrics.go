@@ -32,7 +32,7 @@ var (
 			Subsystem: kubeProxySubsystem,
 			Name:      "sync_proxy_rules_latency_microseconds",
 			Help:      "SyncProxyRules latency",
-			Buckets:   prometheus.ExponentiaqlBuckets(1000, 2, 15),
+			Buckets:   prometheus.ExponentialBuckets(1000, 2, 15),
 		},
 	)
 
