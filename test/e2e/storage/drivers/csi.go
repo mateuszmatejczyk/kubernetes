@@ -38,7 +38,6 @@ package drivers
 import (
 	"fmt"
 	"math/rand"
-	"time"
 
 	. "github.com/onsi/ginkgo"
 	storagev1 "k8s.io/api/storage/v1"
@@ -67,9 +66,9 @@ func InitHostPathCSIDriver() TestDriver {
 			SupportedFsType: sets.NewString(
 				"", // Default fsType
 			),
-			IsPersistent:       true,
-			IsFsGroupSupported: false,
-			IsBlockSupported:   false,
+			Capabilities: map[Capability]bool{
+				CapPersistence: true,
+			},
 		},
 	}
 }
@@ -153,9 +152,9 @@ func InitHostV0PathCSIDriver() TestDriver {
 			SupportedFsType: sets.NewString(
 				"", // Default fsType
 			),
-			IsPersistent:       true,
-			IsFsGroupSupported: false,
-			IsBlockSupported:   false,
+			Capabilities: map[Capability]bool{
+				CapPersistence: true,
+			},
 		},
 	}
 }
@@ -243,9 +242,11 @@ func InitGcePDCSIDriver() TestDriver {
 				"ext4",
 				"xfs",
 			),
-			IsPersistent:       true,
-			IsFsGroupSupported: true,
-			IsBlockSupported:   false,
+			Capabilities: map[Capability]bool{
+				CapPersistence: true,
+				CapFsGroup:     true,
+				CapExec:        true,
+			},
 		},
 	}
 }
@@ -256,14 +257,8 @@ func (g *gcePDCSIDriver) GetDriverInfo() *DriverInfo {
 
 func (g *gcePDCSIDriver) SkipUnsupportedTest(pattern testpatterns.TestPattern) {
 	f := g.driverInfo.Framework
-	cs := f.ClientSet
-	config := g.driverInfo.Config
 	framework.SkipUnlessProviderIs("gce", "gke")
-	framework.SkipIfMultizone(cs)
-
-	// TODO(#62561): Use credentials through external pod identity when that goes GA instead of downloading keys.
-	createGCESecrets(cs, config)
-	framework.SkipUnlessSecretExistsAfterWait(cs, "cloud-sa", config.Namespace, 3*time.Minute)
+	framework.SkipIfMultizone(f.ClientSet)
 }
 
 func (g *gcePDCSIDriver) GetDynamicProvisionStorageClass(fsType string) *storagev1.StorageClass {
@@ -290,6 +285,8 @@ func (g *gcePDCSIDriver) CreateDriver() {
 	// 	DriverContainerName:      "gce-driver",
 	// 	ProvisionerContainerName: "csi-external-provisioner",
 	// }
+	createGCESecrets(g.driverInfo.Framework.ClientSet, g.driverInfo.Config)
+
 	cleanup, err := g.driverInfo.Framework.CreateFromManifests(nil,
 		"test/e2e/testing-manifests/storage-csi/driver-registrar/rbac.yaml",
 		"test/e2e/testing-manifests/storage-csi/external-attacher/rbac.yaml",
@@ -334,9 +331,11 @@ func InitGcePDExternalCSIDriver() TestDriver {
 				"ext4",
 				"xfs",
 			),
-			IsPersistent:       true,
-			IsFsGroupSupported: true,
-			IsBlockSupported:   false,
+			Capabilities: map[Capability]bool{
+				CapPersistence: true,
+				CapFsGroup:     true,
+				CapExec:        true,
+			},
 		},
 	}
 }

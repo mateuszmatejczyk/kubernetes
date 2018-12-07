@@ -44,6 +44,7 @@ import (
 	schedulerinternalcache "k8s.io/kubernetes/pkg/scheduler/internal/cache"
 	internalqueue "k8s.io/kubernetes/pkg/scheduler/internal/queue"
 	"k8s.io/kubernetes/pkg/scheduler/metrics"
+	pluginsv1alpha1 "k8s.io/kubernetes/pkg/scheduler/plugins/v1alpha1"
 	"k8s.io/kubernetes/pkg/scheduler/util"
 	"k8s.io/kubernetes/pkg/scheduler/volumebinder"
 )
@@ -103,6 +104,7 @@ type genericScheduler struct {
 	priorityMetaProducer     algorithm.PriorityMetadataProducer
 	predicateMetaProducer    algorithm.PredicateMetadataProducer
 	prioritizers             []algorithm.PriorityConfig
+	pluginSet                pluginsv1alpha1.PluginSet
 	extenders                []algorithm.SchedulerExtender
 	lastNodeIndex            uint64
 	alwaysCheckAllPredicates bool
@@ -390,7 +392,7 @@ func (g *genericScheduler) findNodesThatFit(pod *v1.Pod, nodes []*v1.Node) ([]*v
 	if len(g.predicates) == 0 {
 		filtered = nodes
 	} else {
-		allNodes := int32(g.cache.NodeTree().NumNodes)
+		allNodes := int32(g.cache.NodeTree().NumNodes())
 		numNodesToFind := g.numFeasibleNodesToFind(allNodes)
 
 		// Create filtered list with enough space to avoid growing it
@@ -655,24 +657,26 @@ func PrioritizeNodes(
 
 	// DEPRECATED: we can remove this when all priorityConfigs implement the
 	// Map-Reduce pattern.
-	workqueue.ParallelizeUntil(context.TODO(), 16, len(priorityConfigs), func(i int) {
-		priorityConfig := priorityConfigs[i]
-		if priorityConfig.Function == nil {
+	for i := range priorityConfigs {
+		if priorityConfigs[i].Function != nil {
+			wg.Add(1)
+			go func(index int) {
+				defer wg.Done()
+				var err error
+				results[index], err = priorityConfigs[index].Function(pod, nodeNameToInfo, nodes)
+				if err != nil {
+					appendError(err)
+				}
+			}(i)
+		} else {
 			results[i] = make(schedulerapi.HostPriorityList, len(nodes))
-			return
 		}
-
-		var err error
-		results[i], err = priorityConfig.Function(pod, nodeNameToInfo, nodes)
-		if err != nil {
-			appendError(err)
-		}
-	})
+	}
 
 	workqueue.ParallelizeUntil(context.TODO(), 16, len(nodes), func(index int) {
 		nodeInfo := nodeNameToInfo[nodes[index].Name]
-		for i, priorityConfig := range priorityConfigs {
-			if priorityConfig.Function != nil {
+		for i := range priorityConfigs {
+			if priorityConfigs[i].Function != nil {
 				continue
 			}
 
@@ -685,22 +689,22 @@ func PrioritizeNodes(
 		}
 	})
 
-	for i, priorityConfig := range priorityConfigs {
-		if priorityConfig.Reduce == nil {
+	for i := range priorityConfigs {
+		if priorityConfigs[i].Reduce == nil {
 			continue
 		}
 		wg.Add(1)
-		go func(index int, config algorithm.PriorityConfig) {
+		go func(index int) {
 			defer wg.Done()
-			if err := config.Reduce(pod, meta, nodeNameToInfo, results[index]); err != nil {
+			if err := priorityConfigs[index].Reduce(pod, meta, nodeNameToInfo, results[index]); err != nil {
 				appendError(err)
 			}
 			if klog.V(10) {
 				for _, hostPriority := range results[index] {
-					klog.Infof("%v -> %v: %v, Score: (%d)", util.GetPodFullName(pod), hostPriority.Host, config.Name, hostPriority.Score)
+					klog.Infof("%v -> %v: %v, Score: (%d)", util.GetPodFullName(pod), hostPriority.Host, priorityConfigs[index].Name, hostPriority.Score)
 				}
 			}
-		}(i, priorityConfig)
+		}(i)
 	}
 	// Wait for all computations to be finished.
 	wg.Wait()
@@ -720,14 +724,14 @@ func PrioritizeNodes(
 
 	if len(extenders) != 0 && nodes != nil {
 		combinedScores := make(map[string]int, len(nodeNameToInfo))
-		for _, extender := range extenders {
-			if !extender.IsInterested(pod) {
+		for i := range extenders {
+			if !extenders[i].IsInterested(pod) {
 				continue
 			}
 			wg.Add(1)
-			go func(ext algorithm.SchedulerExtender) {
+			go func(extIndex int) {
 				defer wg.Done()
-				prioritizedList, weight, err := ext.Prioritize(pod, nodes)
+				prioritizedList, weight, err := extenders[extIndex].Prioritize(pod, nodes)
 				if err != nil {
 					// Prioritization errors from extender can be ignored, let k8s/other extenders determine the priorities
 					return
@@ -736,12 +740,12 @@ func PrioritizeNodes(
 				for i := range *prioritizedList {
 					host, score := (*prioritizedList)[i].Host, (*prioritizedList)[i].Score
 					if klog.V(10) {
-						klog.Infof("%v -> %v: %v, Score: (%d)", util.GetPodFullName(pod), host, ext.Name(), score)
+						klog.Infof("%v -> %v: %v, Score: (%d)", util.GetPodFullName(pod), host, extenders[extIndex].Name(), score)
 					}
 					combinedScores[host] += score * weight
 				}
 				mu.Unlock()
-			}(extender)
+			}(i)
 		}
 		// wait for all go routines to finish
 		wg.Wait()
@@ -1152,6 +1156,7 @@ func NewGenericScheduler(
 	predicateMetaProducer algorithm.PredicateMetadataProducer,
 	prioritizers []algorithm.PriorityConfig,
 	priorityMetaProducer algorithm.PriorityMetadataProducer,
+	pluginSet pluginsv1alpha1.PluginSet,
 	extenders []algorithm.SchedulerExtender,
 	volumeBinder *volumebinder.VolumeBinder,
 	pvcLister corelisters.PersistentVolumeClaimLister,
@@ -1168,6 +1173,7 @@ func NewGenericScheduler(
 		predicateMetaProducer:    predicateMetaProducer,
 		prioritizers:             prioritizers,
 		priorityMetaProducer:     priorityMetaProducer,
+		pluginSet:                pluginSet,
 		extenders:                extenders,
 		cachedNodeInfoMap:        make(map[string]*schedulercache.NodeInfo),
 		volumeBinder:             volumeBinder,

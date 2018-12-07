@@ -2491,7 +2491,7 @@ func DumpAllNamespaceInfo(c clientset.Interface, namespace string) {
 	// 1. it takes tens of minutes or hours to grab all of them
 	// 2. there are so many of them that working with them are mostly impossible
 	// So we dump them only if the cluster is relatively small.
-	maxNodesForDump := 20
+	maxNodesForDump := TestContext.MaxNodesToGather
 	if nodes, err := c.CoreV1().Nodes().List(metav1.ListOptions{}); err == nil {
 		if len(nodes.Items) <= maxNodesForDump {
 			dumpAllPodInfo(c)
@@ -2734,7 +2734,7 @@ func WaitForAllNodesSchedulable(c clientset.Interface, timeout time.Duration) er
 		// However, we only allow non-ready nodes with some specific reasons.
 		if len(notSchedulable) > 0 {
 			// In large clusters, log them only every 10th pass.
-			if len(nodes.Items) >= largeClusterThreshold && attempt%10 == 0 {
+			if len(nodes.Items) < largeClusterThreshold || attempt%10 == 0 {
 				Logf("Unschedulable nodes:")
 				for i := range notSchedulable {
 					Logf("-> %s Ready=%t Network=%t Taints=%v",
@@ -3601,44 +3601,43 @@ func DeletePodOrFail(c clientset.Interface, ns, name string) {
 // GetSigner returns an ssh.Signer for the provider ("gce", etc.) that can be
 // used to SSH to their nodes.
 func GetSigner(provider string) (ssh.Signer, error) {
-	// Get the directory in which SSH keys are located.
-	keydir := filepath.Join(os.Getenv("HOME"), ".ssh")
-
 	// Select the key itself to use. When implementing more providers here,
 	// please also add them to any SSH tests that are disabled because of signer
 	// support.
 	keyfile := ""
-	key := ""
 	switch provider {
 	case "gce", "gke", "kubemark":
-		keyfile = "google_compute_engine"
-	case "aws":
-		// If there is an env. variable override, use that.
-		aws_keyfile := os.Getenv("AWS_SSH_KEY")
-		if len(aws_keyfile) != 0 {
-			return sshutil.MakePrivateKeySignerFromFile(aws_keyfile)
+		keyfile = os.Getenv("GCE_SSH_KEY")
+		if keyfile == "" {
+			keyfile = "google_compute_engine"
 		}
-		// Otherwise revert to home dir
-		keyfile = "kube_aws_rsa"
+	case "aws":
+		keyfile = os.Getenv("AWS_SSH_KEY")
+		if keyfile == "" {
+			keyfile = "kube_aws_rsa"
+		}
 	case "local", "vsphere":
-		keyfile = os.Getenv("LOCAL_SSH_KEY") // maybe?
-		if len(keyfile) == 0 {
+		keyfile = os.Getenv("LOCAL_SSH_KEY")
+		if keyfile == "" {
 			keyfile = "id_rsa"
 		}
 	case "skeleton":
 		keyfile = os.Getenv("KUBE_SSH_KEY")
-		if len(keyfile) == 0 {
+		if keyfile == "" {
 			keyfile = "id_rsa"
 		}
 	default:
 		return nil, fmt.Errorf("GetSigner(...) not implemented for %s", provider)
 	}
 
-	if len(key) == 0 {
-		key = filepath.Join(keydir, keyfile)
+	// Respect absolute paths for keys given by user, fallback to assuming
+	// relative paths are in ~/.ssh
+	if !filepath.IsAbs(keyfile) {
+		keydir := filepath.Join(os.Getenv("HOME"), ".ssh")
+		keyfile = filepath.Join(keydir, keyfile)
 	}
 
-	return sshutil.MakePrivateKeySignerFromFile(key)
+	return sshutil.MakePrivateKeySignerFromFile(keyfile)
 }
 
 // CheckPodsRunningReady returns whether all pods whose names are listed in
@@ -5271,4 +5270,25 @@ func WaitForNodeHasTaintOrNot(c clientset.Interface, nodeName string, taint *v1.
 		return fmt.Errorf("expect node %v to have taint = %v within %v: %v", nodeName, wantTrue, timeout, err)
 	}
 	return nil
+}
+
+// GetFileModeRegex returns a file mode related regex which should be matched by the mounttest pods' output.
+// If the given mask is nil, then the regex will contain the default OS file modes, which are 0644 for Linux and 0775 for Windows.
+func GetFileModeRegex(filePath string, mask *int32) string {
+	var (
+		linuxMask   int32
+		windowsMask int32
+	)
+	if mask == nil {
+		linuxMask = int32(0644)
+		windowsMask = int32(0775)
+	} else {
+		linuxMask = *mask
+		windowsMask = *mask
+	}
+
+	linuxOutput := fmt.Sprintf("mode of file \"%s\": %v", filePath, os.FileMode(linuxMask))
+	windowsOutput := fmt.Sprintf("mode of Windows file \"%v\": %s", filePath, os.FileMode(windowsMask))
+
+	return fmt.Sprintf("(%s|%s)", linuxOutput, windowsOutput)
 }
