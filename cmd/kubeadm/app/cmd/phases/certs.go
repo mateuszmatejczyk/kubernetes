@@ -31,6 +31,7 @@ import (
 	kubeadmconstants "k8s.io/kubernetes/cmd/kubeadm/app/constants"
 	certsphase "k8s.io/kubernetes/cmd/kubeadm/app/phases/certs"
 	kubeadmutil "k8s.io/kubernetes/cmd/kubeadm/app/util"
+	"k8s.io/kubernetes/cmd/kubeadm/app/util/pkiutil"
 	"k8s.io/kubernetes/pkg/util/normalizer"
 )
 
@@ -66,12 +67,11 @@ type certsData interface {
 // NewCertsPhase returns the phase for the certs
 func NewCertsPhase() workflow.Phase {
 	return workflow.Phase{
-		Name:         "certs",
-		Short:        "Certificate generation",
-		Phases:       newCertSubPhases(),
-		Run:          runCerts,
-		InheritFlags: getCertPhaseFlags("all"),
-		LocalFlags:   localFlags(),
+		Name:   "certs",
+		Short:  "Certificate generation",
+		Phases: newCertSubPhases(),
+		Run:    runCerts,
+		Long:   cmdutil.MacroCommandLongDescription,
 	}
 }
 
@@ -86,6 +86,16 @@ func localFlags() *pflag.FlagSet {
 func newCertSubPhases() []workflow.Phase {
 	subPhases := []workflow.Phase{}
 
+	// All subphase
+	allPhase := workflow.Phase{
+		Name:           "all",
+		Short:          "Generates all certificates",
+		InheritFlags:   getCertPhaseFlags("all"),
+		RunAllSiblings: true,
+	}
+
+	subPhases = append(subPhases, allPhase)
+
 	certTree, _ := certsphase.GetDefaultCertList().AsMap().CertTree()
 
 	for ca, certList := range certTree {
@@ -94,6 +104,7 @@ func newCertSubPhases() []workflow.Phase {
 
 		for _, cert := range certList {
 			certPhase := newCertSubPhase(cert, runCertPhase(cert, ca))
+			certPhase.LocalFlags = localFlags()
 			subPhases = append(subPhases, certPhase)
 		}
 	}
@@ -123,7 +134,6 @@ func newCertSubPhase(certSpec *certsphase.KubeadmCert, run func(c workflow.RunDa
 		),
 		Run:          run,
 		InheritFlags: getCertPhaseFlags(certSpec.Name),
-		LocalFlags:   localFlags(),
 	}
 	return phase
 }
@@ -219,9 +229,13 @@ func runCAPhase(ca *certsphase.KubeadmCert) func(c workflow.RunData) error {
 			return errors.New("certs phase invoked with an invalid data struct")
 		}
 
-		// if external CA mode, skips certificate authority generation
-		if data.ExternalCA() {
-			fmt.Printf("[certs] External CA mode: Using existing %s certificate authority\n", ca.BaseName)
+		// TODO(EKF): can we avoid loading these certificates every time?
+		if _, err := pkiutil.TryLoadCertFromDisk(data.CertificateDir(), ca.BaseName); err == nil {
+			if _, err := pkiutil.TryLoadKeyFromDisk(data.CertificateDir(), ca.BaseName); err == nil {
+				fmt.Printf("[certs] Using existing %s certificate authority\n", ca.BaseName)
+				return nil
+			}
+			fmt.Printf("[certs] Using existing %s keyless certificate authority", ca.BaseName)
 			return nil
 		}
 
@@ -248,9 +262,18 @@ func runCertPhase(cert *certsphase.KubeadmCert, caCert *certsphase.KubeadmCert) 
 			return errors.New("certs phase invoked with an invalid data struct")
 		}
 
-		// if external CA mode, skip certificate generation
-		if data.ExternalCA() {
-			fmt.Printf("[certs] External CA mode: Using existing %s certificate\n", cert.BaseName)
+		// TODO(EKF): can we avoid loading these certificates every time?
+		if certData, _, err := pkiutil.TryLoadCertAndKeyFromDisk(data.CertificateDir(), cert.BaseName); err == nil {
+			caCertData, err := pkiutil.TryLoadCertFromDisk(data.CertificateDir(), caCert.BaseName)
+			if err != nil {
+				return errors.Wrapf(err, "couldn't load CA certificate %s", caCert.Name)
+			}
+
+			if err := certData.CheckSignatureFrom(caCertData); err != nil {
+				return errors.Wrapf(err, "[certs] certificate %s not signed by CA certificate %s", cert.BaseName, caCert.BaseName)
+			}
+
+			fmt.Printf("[certs] Using existing %s certificate and key on disk\n", cert.BaseName)
 			return nil
 		}
 

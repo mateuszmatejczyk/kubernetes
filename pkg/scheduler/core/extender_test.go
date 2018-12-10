@@ -507,7 +507,7 @@ func TestGenericSchedulerWithExtenders(t *testing.T) {
 			for _, name := range test.nodes {
 				cache.AddNode(createNode(name))
 			}
-			queue := internalqueue.NewSchedulingQueue()
+			queue := internalqueue.NewSchedulingQueue(nil)
 			scheduler := NewGenericScheduler(
 				cache,
 				nil,
@@ -516,6 +516,7 @@ func TestGenericSchedulerWithExtenders(t *testing.T) {
 				algorithm.EmptyPredicateMetadataProducer,
 				test.prioritizers,
 				algorithm.EmptyPriorityMetadataProducer,
+				emptyPluginSet,
 				extenders,
 				nil,
 				schedulertesting.FakePersistentVolumeClaimLister{},
