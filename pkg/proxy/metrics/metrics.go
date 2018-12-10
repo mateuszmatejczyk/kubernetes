@@ -45,7 +45,7 @@ var (
 			Subsystem: kubeProxySubsystem,
 			Name:      "network_programming_latency_microseconds",
 			Help:      "In Cluster Network Programming Latency (microseconds)",
-			Buckets:   prometheus.ExponentialBuckets(1000, 2, 15),
+			Buckets:   prometheus.ExponentialBuckets(1000, 2, 32),
 		},
 	)
 )
