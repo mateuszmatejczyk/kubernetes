@@ -198,11 +198,15 @@ func (e *EndpointController) addPod(obj interface{}) {
 		return
 	}
 
-	triggerTime := getPodLastTransitionTime(pod)
-
 	for key := range services {
-		e.triggerTimeTracker.observe(key, triggerTime)
 		e.queue.Add(key)
+	}
+
+	triggerTime := getPodLastTransitionTime(pod)
+	if triggerTime != nil {
+		for key := range services {
+			e.triggerTimeTracker.observe(key, *triggerTime)
+		}
 	}
 }
 
@@ -302,11 +306,15 @@ func (e *EndpointController) updatePod(old, cur interface{}) {
 		services = determineNeededServiceUpdates(oldServices, services, podChangedFlag)
 	}
 
-	triggerTime := getPodLastTransitionTime(newPod)
-
 	for key := range services {
-		e.triggerTimeTracker.observe(key, triggerTime)
 		e.queue.Add(key)
+	}
+
+	oldTriggerTime, triggerTime  := getPodLastTransitionTime(newPod), getPodLastTransitionTime(newPod)
+	if triggerTime != nil && (oldTriggerTime == nil || triggerTime.After(*oldTriggerTime)) {
+		for key := range services {
+			e.triggerTimeTracker.observe(key, *triggerTime)
+		}
 	}
 }
 
@@ -519,7 +527,7 @@ func (e *EndpointController) syncService(key string) error {
 	if newEndpoints.Annotations == nil {
 		newEndpoints.Annotations = make(map[string]string)
 	}
-	if !lastTriggerChangeTime.IsZero() {
+	if lastTriggerChangeTime != nil {
 		newEndpoints.Annotations[v1.EndpointsLastChangeTriggerTime] =
 				lastTriggerChangeTime.Format(time.RFC3339Nano)
 	}
@@ -613,20 +621,27 @@ func shouldPodBeInEndpoints(pod *v1.Pod) bool {
 
 // Computes the last-transition-time for the given pod, defined as max lastTransitionTime over
 // all pod-conditions.
-func getPodLastTransitionTime(pod *v1.Pod) (lastTransitionTime time.Time) {
+func getPodLastTransitionTime(pod *v1.Pod) (*time.Time) {
+	var lastTransitionTime time.Time
 	for _, condition := range pod.Status.Conditions {
 		val := condition.LastTransitionTime.Time
 		if lastTransitionTime.Before(val) {
 			lastTransitionTime = val
 		}
 	}
-	return lastTransitionTime
+	if lastTransitionTime.IsZero() {
+		return nil
+	}
+	return &lastTransitionTime
 }
 
 func getPodTriggerTimes(pods []*v1.Pod) []time.Time {
   times := make([]time.Time, 0, len(pods))
   for _, pod := range pods {
-  	times = append(times, getPodLastTransitionTime(pod))
+  	podLastTransitionTime := getPodLastTransitionTime(pod)
+  	if podLastTransitionTime != nil {
+			times = append(times, *podLastTransitionTime)
+		}
 	}
   return times;
 }
