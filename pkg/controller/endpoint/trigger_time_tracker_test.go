@@ -18,6 +18,8 @@ limitations under the License.
 package endpoint
 
 import (
+	"reflect"
+	"runtime"
 	"testing"
 	"time"
 	"github.com/prometheus/client_golang/prometheus"
@@ -166,7 +168,7 @@ func TestEventsAfterListingInBothBatches(t *testing.T) {
 	tester.observe(key, t3) // P0
 
 	tester.startListing(key)     // P0, P1
-	tester.whenListingReturned(key, t3, t2).expect(t2)
+	tester.whenListingReturned(key, t3, t2).expectNil() // t2 and t3 was already processed.
 }
 
 func TestEventsAfterListing_SameObjectUpdatedMultipleTimes(t *testing.T) {
@@ -218,13 +220,29 @@ func TestMultipleKeysUpdatedSimultaneously(t *testing.T) {
 	tester.whenListingReturned(key, t5, t1).expect(t5)
 }
 
-func NoEventsListReturnedNothing(t *testing.T) {
+func TestNoEventsListReturnedNothing(t *testing.T) {
 	tester := newTester(t)
 
 	tester.startListing(key)
 	// This shouldn't happen, but make sure it won't crash.
-	tester.whenListingReturned(key).expect(time.Time{}) // Zero time returned.
+	tester.whenListingReturned(key).expectNil()
 }
+
+func TestListWithoutUpdate(t *testing.T) {
+	tester := newTester(t)
+
+	tester.observe(key, t0) // P0
+	tester.observe(key, t1) // P1
+	tester.observe(key, t2) // P1
+
+	tester.startListing(key)
+	tester.whenListingReturned(key, t0, t1, t2).expect(t0)
+
+	// No observe events, but list again. It can happen e.g. when labels where updated.
+	tester.startListing(key)
+	tester.whenListingReturned(key, t0, t1, t2).expectNil() // Nil returned, nothing will be exported.
+}
+
 
 
 // ------- Test Utils -------
@@ -243,13 +261,23 @@ func (this *tester) whenListingReturned(key string, val ...time.Time) subject {
 }
 
 type subject struct {
-	got time.Time
+	got *time.Time
 	t *testing.T
 }
 
+
 func (s subject) expect(val time.Time) {
-	if s.got != val {
-		s.t.Errorf("Wrong trigger time, expected %s, got %s", val, s.got)
+	s.expectPointer(&val)
+}
+
+func (s subject) expectNil() {
+	s.expectPointer(nil)
+}
+
+func (s subject) expectPointer(val *time.Time) {
+	if !reflect.DeepEqual(s.got, val) {
+		_, fn, line, _ := runtime.Caller(2)
+		s.t.Errorf("Wrong trigger time in %s:%d expected %s, got %s", fn, line, val, s.got)
 	}
 }
 

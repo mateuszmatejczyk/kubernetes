@@ -17,8 +17,8 @@ limitations under the License.
 package endpoint
 
 import (
-	"time"
 	"sync"
+	"time"
 
 	"k8s.io/klog"
 )
@@ -133,21 +133,41 @@ func (this *triggerTimeTracker) startListing(key string) {
 
 // Method that should be called directly after the listing objects has ended. It will reset the
 // state for the given endpoints key and return the time that should be exported as the
-// EndpointsLastChangeTriggerTime annotation.
+// EndpointsLastChangeTriggerTime annotation. It may happen that the method will return nil, in such
+// case the annotation shouldn't be exported.
 func (this *triggerTimeTracker) stopListingAndReset(
-		key string, triggerTimesFromListing []time.Time) (endpointsLastChangeTriggerTime time.Time){
+		key string, triggerTimesFromListing []time.Time) (*time.Time){
 	this.mutex.Lock()
 	defer this.mutex.Unlock()
 
+	var endpointsLastChangeTriggerTime time.Time
+
 	if _, ok := this.minTriggerTime[key]; !ok {
 		// There was no event observed that set the minTriggerTime.
-		// Try in the dirty times.
-		if p := minBiggerThan(this.dirtyTriggerTimes[key], this.lastSyncMaxTriggerTime[key]); p != nil {
-			this.minTriggerTime[key] = *p
-		} else {
-			// The only thing we can do is to use the min(triggerTimesFromListing).
-			this.minTriggerTime[key] = min(triggerTimesFromListing)
+
+		minTriggerTime := func() *time.Time {
+			// Try in the dirty times.
+			if p := minGreaterThan(this.dirtyTriggerTimes[key], this.lastSyncMaxTriggerTime[key]);
+					p != nil {
+				return p
+			}
+			// If nothing found in the dirty times, try in the times from listing objects.
+			if p := minGreaterThan(triggerTimesFromListing, this.lastSyncMaxTriggerTime[key]); p != nil {
+				return p
+			}
+
+			return nil
+		}()
+
+		if minTriggerTime == nil {
+			// Nothing was observed, nothing in the dirty set, nothing fresh enough in listing times.
+			// Reset state and return nil, there is nothing to export this time.
+			this.isListingObjects[key] = false
+			this.dirtyTriggerTimes[key] = nil
+			return nil
 		}
+
+		this.minTriggerTime[key] = *minTriggerTime
 	}
 
 	endpointsLastChangeTriggerTime = this.minTriggerTime[key]
@@ -155,7 +175,7 @@ func (this *triggerTimeTracker) stopListingAndReset(
 
 	maxTimeFromListing := max(triggerTimesFromListing)
 	// See if there is anything in dirty times that could have been a potential new minTriggerTime.
-	if p := minBiggerThan(this.dirtyTriggerTimes[key], maxTimeFromListing); p != nil {
+	if p := minGreaterThan(this.dirtyTriggerTimes[key], maxTimeFromListing); p != nil {
 		this.minTriggerTime[key] = *p
 	}
 	// Clear dirty times.
@@ -165,7 +185,7 @@ func (this *triggerTimeTracker) stopListingAndReset(
 	// Updated the lastSync min and max.
 	this.lastSyncMinTriggerTime[key] = endpointsLastChangeTriggerTime
 	this.lastSyncMaxTriggerTime[key] = maxTimeFromListing
-	return endpointsLastChangeTriggerTime
+	return &endpointsLastChangeTriggerTime
 }
 
 
@@ -189,10 +209,10 @@ func max(times []time.Time) (maxTime time.Time) {
 	return maxTime
 }
 
-func minBiggerThan(times []time.Time, biggerThan time.Time) (minTime *time.Time) {
-	for _, t := range times {
-		if t.After(biggerThan) && (minTime == nil || t.Before(*minTime)) {
-			minTime = &t
+func minGreaterThan(times []time.Time, greaterThan time.Time) (minTime *time.Time) {
+	for i, t := range times {
+		if t.After(greaterThan) && (minTime == nil || t.Before(*minTime)) {
+			minTime = &times[i] // Cannot use &t as t is a variable that is updated in every iteration.
 		}
 	}
 	return minTime
