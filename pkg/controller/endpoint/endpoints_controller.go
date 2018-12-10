@@ -202,8 +202,8 @@ func (e *EndpointController) addPod(obj interface{}) {
 		e.queue.Add(key)
 	}
 
-	triggerTime := getPodLastTransitionTime(pod)
-	if triggerTime != nil {
+
+	if triggerTime := getPodLastTransitionTime(pod); triggerTime != nil {
 		for key := range services {
 			e.triggerTimeTracker.observe(key, *triggerTime)
 		}
