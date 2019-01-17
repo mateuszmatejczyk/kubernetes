@@ -14,6 +14,10 @@ import (
 var (
 	logFile = flag.String("log-file", "kube-apiserver.log", "Name of the apiserver log file to analyze.")
 	outputFile = flag.String("output-file", "output.csv", "Name of the output file")
+	nWorkers = flag.Int("n-workers", 100, "Number of routines processing file")
+
+	re = regexp.MustCompile("^I\\d+\\s+([0-9:\\.]+)\\s+[^\\]]+]\\s+([A-Z]+)\\s+([^:]+):\\s+\\(([^\\)]+)\\)\\s+(\\d+)\\s+\\[([^\\s]+)\\s+")
+
 )
 
 func main() {
@@ -33,17 +37,15 @@ func main() {
 	w := bufio.NewWriter(f)
 	fmt.Fprintln(w, Header)
 
-	c := 0
 
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		c++
-		if c % 100000 == 0 {
-			fmt.Printf("Processed %d lines\n", c)
-			w.Flush()
+	workerChan := make(chan string, *nWorkers)
+	writerChan := make(chan string)
+
+	worker := func () {
+		line, ok := <-workerChan
+		if !ok {
+			return
 		}
-		line := scanner.Text()
-		re := regexp.MustCompile("^I\\d+\\s+([0-9:\\.]+)\\s+[^\\]]+]\\s+([A-Z]+)\\s+([^:]+):\\s+\\(([^\\)]+)\\)\\s+(\\d+)\\s+\\[([^\\s]+)\\s+")
 
 		groups := re.FindStringSubmatch(line)
 		if len(groups) > 0 {
@@ -61,16 +63,45 @@ func main() {
 				caller: groups[6],
 			}
 
-			fmt.Fprintln(w, entry.toString())
-
+			writerChan <- entry.toString()
 		}
+	}
+
+	for i := 0; i < *nWorkers; i++ {
+		go worker()
+	}
+
+	go func() {
+		c := 0
+		for {
+			line, ok := <-writerChan
+			if !ok {
+				w.Flush()
+				return
+			}
+			fmt.Fprintln(w, line)
+
+			c++
+			if c % 100000 == 0 {
+				fmt.Printf("Processed %d lines\n", c)
+				w.Flush()
+			}
+		}
+	}()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		workerChan <- line
 	}
 	if err := scanner.Err(); err != nil {
 		panic(err)
 	}
 
-	w.Flush()
+	close(workerChan)
+	close(writerChan)
 }
+
 
 type Entry struct {
 	time time.Time
