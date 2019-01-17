@@ -42,6 +42,7 @@ func main() {
 	writerChan := make(chan string, *nWorkers*100)
 	workerStopChan := make(chan int, *nWorkers)
 	writerStopChan := make(chan int, *nWorkers)
+	mainStopChan := make(chan int)
 
 	worker := func () {
 		for {
@@ -90,6 +91,7 @@ func main() {
 					}
 				case <-writerStopChan:
 					w.Flush()
+					mainStopChan <- 0
 					return
 			}
 		}
@@ -107,6 +109,8 @@ func main() {
 	for i := 0; i < *nWorkers; i++ {
 		workerStopChan <- 0
 	}
+
+	<-mainStopChan
 }
 
 
