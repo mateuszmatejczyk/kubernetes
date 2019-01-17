@@ -38,8 +38,9 @@ func main() {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		c++
-		if c % 10000 == 0 {
+		if c % 100000 == 0 {
 			fmt.Printf("Processed %d lines\n", c)
+			w.Flush()
 		}
 		line := scanner.Text()
 		re := regexp.MustCompile("^I\\d+\\s+([0-9:\\.]+)\\s+[^\\]]+]\\s+([A-Z]+)\\s+([^:]+):\\s+\\(([^\\)]+)\\)\\s+(\\d+)\\s+\\[([^\\s]+)\\s+")
@@ -61,14 +62,14 @@ func main() {
 			}
 
 			fmt.Fprintln(w, entry.toString())
-			w.Flush()
+
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		panic(err)
 	}
 
-
+	w.Flush()
 }
 
 type Entry struct {
