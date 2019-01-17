@@ -17,6 +17,8 @@ var (
 )
 
 func main() {
+	flag.Parse()
+
 	fmt.Println("Hello World!")
 
 	file, err := os.Open(*logFile)
@@ -31,8 +33,14 @@ func main() {
 	w := bufio.NewWriter(f)
 	fmt.Fprintln(w, Header)
 
+	c := 0
+
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
+		c++
+		if c % 10000 == 0 {
+			fmt.Printf("Processed %d lines\n", c)
+		}
 		line := scanner.Text()
 		re := regexp.MustCompile("^I\\d+\\s+([0-9:\\.]+)\\s+[^\\]]+]\\s+([A-Z]+)\\s+([^:]+):\\s+\\(([^\\)]+)\\)\\s+(\\d+)\\s+\\[([^\\s]+)\\s+")
 
