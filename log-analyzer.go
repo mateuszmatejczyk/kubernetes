@@ -38,32 +38,37 @@ func main() {
 	fmt.Fprintln(w, Header)
 
 
-	workerChan := make(chan string, *nWorkers)
-	writerChan := make(chan string)
+	workerChan := make(chan string, *nWorkers*100)
+	writerChan := make(chan string, *nWorkers*100)
+	workerStopChan := make(chan int, *nWorkers)
+	writerStopChan := make(chan int, *nWorkers)
 
 	worker := func () {
-		line, ok := <-workerChan
-		if !ok {
-			return
-		}
+		for {
+			select {
+			case line := <-workerChan:
+				groups := re.FindStringSubmatch(line)
+				if len(groups) > 0 {
+					t, _ := time.Parse("15:04:05.000000", groups[1])
+					t = t.AddDate(2019, 00, 00)
+					latency, _ := time.ParseDuration(groups[4])
+					responseCode, _ := strconv.Atoi(groups[5])
 
-		groups := re.FindStringSubmatch(line)
-		if len(groups) > 0 {
-			t, _ := time.Parse("15:04:05.000000", groups[1])
-			t = t.AddDate(2019, 00, 00)
-			latency, _ := time.ParseDuration(groups[4])
-			responseCode, _ := strconv.Atoi(groups[5])
+					entry := Entry{
+						time:         t,
+						method:       groups[2],
+						path:         groups[3],
+						latency:      latency,
+						responseCode: responseCode,
+						caller:       groups[6],
+					}
 
-			entry := Entry{
-				time: t,
-				method: groups[2],
-				path: groups[3],
-				latency: latency,
-				responseCode: responseCode,
-				caller: groups[6],
+					writerChan <- entry.toString()
+				}
+			case <-workerStopChan:
+				writerStopChan <- 0
+				return
 			}
-
-			writerChan <- entry.toString()
 		}
 	}
 
@@ -74,17 +79,18 @@ func main() {
 	go func() {
 		c := 0
 		for {
-			line, ok := <-writerChan
-			if !ok {
-				w.Flush()
-				return
-			}
-			fmt.Fprintln(w, line)
+			select {
+				case line := <-writerChan:
+					fmt.Fprintln(w, line)
 
-			c++
-			if c % 100000 == 0 {
-				fmt.Printf("Processed %d lines\n", c)
-				w.Flush()
+					c++
+					if c%100000 == 0 {
+						fmt.Printf("Processed %d lines\n", c)
+						w.Flush()
+					}
+				case <-writerStopChan:
+					w.Flush()
+					return
 			}
 		}
 	}()
@@ -98,8 +104,9 @@ func main() {
 		panic(err)
 	}
 
-	close(workerChan)
-	close(writerChan)
+	for i := 0; i < *nWorkers; i++ {
+		workerStopChan <- 0
+	}
 }
 
 
