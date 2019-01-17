@@ -25,7 +25,11 @@ func main() {
 	}
 	defer file.Close()
 
-	entries := []*Entry{}
+	f, err := os.Create(*outputFile)
+	if err != nil { panic(err) }
+	defer f.Close()
+	w := bufio.NewWriter(f)
+	fmt.Fprintln(w, Header)
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -48,24 +52,15 @@ func main() {
 				caller: groups[6],
 			}
 
-			entries = append(entries, &entry)
+			fmt.Fprintln(w, entry.toString())
+			w.Flush()
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		panic(err)
 	}
 
-	fmt.Println(len(entries))
-	f, err := os.Create(*outputFile)
-	if err != nil { panic(err) }
-	defer f.Close()
 
-	w := bufio.NewWriter(f)
-	fmt.Fprintln(w, Header)
-	for _, e := range entries {
-		fmt.Fprintln(w, e.toString())
-	}
-	w.Flush()
 }
 
 type Entry struct {
