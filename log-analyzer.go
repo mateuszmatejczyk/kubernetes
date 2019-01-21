@@ -1,29 +1,34 @@
 package main
 
 import (
+	"bufio"
+	"flag"
 	"fmt"
 	"os"
-	"bufio"
-	"time"
 	"regexp"
 	"strconv"
 	"strings"
-	"flag"
+	"time"
 )
 
 var (
 	logFile = flag.String("log-file", "kube-apiserver.log", "Name of the apiserver log file to analyze.")
 	outputFile = flag.String("output-file", "output.csv", "Name of the output file")
-	nWorkers = flag.Int("n-workers", 100, "Number of routines processing file")
+	nWorkers = flag.Int("n-workers", 1000, "Number of routines processing file")
 
 	re = regexp.MustCompile("^I\\d+\\s+([0-9:\\.]+)\\s+[^\\]]+]\\s+([A-Z]+)\\s+([^:]+):\\s+\\(([^\\)]+)\\)\\s+(\\d+)\\s+\\[([^\\s]+)\\s+")
-
 )
+
+const (
+	stop = ""
+)
+
+// TODO(mmat): Create util, refactor code, add options for nParsers and nWrtiers?
 
 func main() {
 	flag.Parse()
 
-	fmt.Println("Hello World!")
+	fmt.Println("Processing api-server logs...")
 
 	file, err := os.Open(*logFile)
 	if err != nil {
@@ -38,37 +43,36 @@ func main() {
 	fmt.Fprintln(w, Header)
 
 
-	workerChan := make(chan string, *nWorkers*100)
-	writerChan := make(chan string, *nWorkers*100)
-	workerStopChan := make(chan int, *nWorkers)
+	workerChan := make(chan string, *nWorkers*20)
+	writerChan := make(chan string, *nWorkers*20)
 	writerStopChan := make(chan int, *nWorkers)
 	mainStopChan := make(chan int)
 
 	worker := func () {
 		for {
-			select {
-			case line := <-workerChan:
-				groups := re.FindStringSubmatch(line)
-				if len(groups) > 0 {
-					t, _ := time.Parse("15:04:05.000000", groups[1])
-					t = t.AddDate(2019, 00, 00)
-					latency, _ := time.ParseDuration(groups[4])
-					responseCode, _ := strconv.Atoi(groups[5])
-
-					entry := Entry{
-						time:         t,
-						method:       groups[2],
-						path:         groups[3],
-						latency:      latency,
-						responseCode: responseCode,
-						caller:       groups[6],
-					}
-
-					writerChan <- entry.toString()
-				}
-			case <-workerStopChan:
-				writerStopChan <- 0
+			line := <-workerChan
+			if line == stop {
+				writerStopChan <- 1
 				return
+			}
+
+			groups := re.FindStringSubmatch(line)
+			if len(groups) > 0 {
+				t, _ := time.Parse("15:04:05.000000", groups[1])
+				t = t.AddDate(2019, 00, 00)
+				latency, _ := time.ParseDuration(groups[4])
+				responseCode, _ := strconv.Atoi(groups[5])
+
+				entry := Entry{
+					time:         t,
+					method:       groups[2],
+					path:         groups[3],
+					latency:      latency,
+					responseCode: responseCode,
+					caller:       groups[6],
+				}
+
+				writerChan <- entry.toString()
 			}
 		}
 	}
@@ -79,6 +83,7 @@ func main() {
 
 	go func() {
 		c := 0
+		activeWorkers := *nWorkers
 		for {
 			select {
 				case line := <-writerChan:
@@ -86,13 +91,16 @@ func main() {
 
 					c++
 					if c%100000 == 0 {
-						fmt.Printf("Processed %d lines\n", c)
+						fmt.Printf("Wrote %d lines\n", c)
 						w.Flush()
 					}
 				case <-writerStopChan:
-					w.Flush()
-					mainStopChan <- 0
-					return
+					activeWorkers--
+					if activeWorkers == 0 {
+						w.Flush()
+						mainStopChan <- 0
+						return
+					}
 			}
 		}
 	}()
@@ -107,8 +115,9 @@ func main() {
 	}
 
 	for i := 0; i < *nWorkers; i++ {
-		workerStopChan <- 0
+		workerChan <- stop
 	}
+
 
 	<-mainStopChan
 }
