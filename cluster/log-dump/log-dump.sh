@@ -167,7 +167,10 @@ function save-logs() {
         done
 
         if [[ "$dump_systemd_journal" == "true" ]]; then
+          echo "Dumping full systemd journal."
           log-dump-ssh "${node_name}" "sudo journalctl --output=short-precise" > "${dir}/systemd.log" || true
+        else
+          echo "Not dumping full systemd journal."
         fi
     else
         files="${kern_logfile} ${files} ${initd_logfiles} ${supervisord_logfiles}"
