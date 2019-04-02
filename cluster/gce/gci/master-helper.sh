@@ -33,10 +33,12 @@ source "${KUBE_ROOT}/cluster/gce/gci/helper.sh"
 function create-master-instance {
   local address=""
   [[ -n ${1:-} ]] && address="${1}"
+  local internal_address=""
+  [[ -n ${2:-} ]] && internal_address="${2}"
 
   write-master-env
   ensure-gci-metadata-files
-  create-master-instance-internal "${MASTER_NAME}" "${address}"
+  create-master-instance-internal "${MASTER_NAME}" "${address}" "${internal_address}"
 }
 
 function replicate-master-instance() {
@@ -99,6 +101,7 @@ function create-master-instance-internal() {
 
   local -r master_name="${1}"
   local -r address="${2:-}"
+  local -r internal_address="${3:-}"
 
   local preemptible_master=""
   if [[ "${PREEMPTIBLE_MASTER:-}" == "true" ]]; then
@@ -114,7 +117,8 @@ function create-master-instance-internal() {
 
   local network=$(make-gcloud-network-argument \
     "${NETWORK_PROJECT}" "${REGION}" "${NETWORK}" "${SUBNETWORK:-}" \
-    "${address:-}" "${enable_ip_aliases:-}" "${IP_ALIAS_SIZE:-}")
+    "${address:-}" "${enable_ip_aliases:-}" "${IP_ALIAS_SIZE:-}" "${internal_address}")
+  echo "MASTER VM NETWORK: $network"
 
   local metadata="kube-env=${KUBE_TEMP}/master-kube-env.yaml"
   metadata="${metadata},kubelet-config=${KUBE_TEMP}/master-kubelet-config.yaml"

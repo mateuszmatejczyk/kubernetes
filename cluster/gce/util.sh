@@ -1881,6 +1881,7 @@ function make-gcloud-network-argument() {
   local address="$5"          # optional
   local enable_ip_alias="$6"  # optional
   local alias_size="$7"       # optional
+  local internal_address="${8:-}" # optional
 
   local networkURL="projects/${network_project}/global/networks/${network}"
   local subnetURL="projects/${network_project}/regions/${region}/subnetworks/${subnet:-}"
@@ -1890,8 +1891,15 @@ function make-gcloud-network-argument() {
   if [[ "${enable_ip_alias}" == 'true' ]]; then
     ret="--network-interface"
     ret="${ret} network=${networkURL}"
-    # If address is omitted, instance will not receive an external IP.
-    ret="${ret},address=${address:-}"
+
+    if [[ "$address" == "no-address" ]]; then
+      ret="${ret},no-address"
+    else
+      ret="${ret},address=${address:-}"
+    fi
+    if [[ -n ${internal_address:-} ]]; then
+      ret="${ret},private-network-ip=${internal_address}"
+    fi
     ret="${ret},subnet=${subnetURL}"
     ret="${ret},aliases=pods-default:${alias_size}"
     ret="${ret} --no-can-ip-forward"
@@ -1905,6 +1913,9 @@ function make-gcloud-network-argument() {
     ret="${ret} --can-ip-forward"
     if [[ -n ${address:-} ]]; then
       ret="${ret} --address ${address}"
+    fi
+    if [[ -n ${internal_address:-} ]]; then
+      ret="${ret} --private-network-ip ${internal_address}"
     fi
   fi
 
@@ -2014,9 +2025,10 @@ function create-node-template() {
     "${REGION}" \
     "${NETWORK}" \
     "${SUBNETWORK:-}" \
-    "" \
+    "no-address" \
     "${ENABLE_IP_ALIASES:-}" \
     "${IP_ALIAS_SIZE:-}")
+  echo "NETWORK FLAGS: $network" >&2
 
   local node_image_flags=""
   if [[ "${os}" == 'linux' ]]; then
@@ -2231,7 +2243,7 @@ function create-subnetworks() {
           echo "${color_yellow}Using pre-existing network ${NETWORK}, subnets won't be expanded to /19!${color_norm}"
         fi
       elif [[ "${CREATE_CUSTOM_NETWORK:-}" == "true" && "${PREEXISTING_NETWORK}" != "true" ]]; then
-          gcloud compute networks subnets create "${SUBNETWORK}" --project "${NETWORK_PROJECT}" --region "${REGION}" --network "${NETWORK}" --range "${NODE_IP_RANGE}"
+          gcloud compute networks subnets create "${SUBNETWORK}" --project "${NETWORK_PROJECT}" --region "${REGION}" --network "${NETWORK}" --range "${NODE_IP_RANGE}" --enable-private-ip-google-access
       fi
       return;;
     *) echo "${color_red}Invalid argument to ENABLE_IP_ALIASES${color_norm}"
@@ -2252,6 +2264,7 @@ function create-subnetworks() {
       --project "${NETWORK_PROJECT}" \
       --network ${NETWORK} \
       --region ${REGION} \
+      --enable-private-ip-google-access \
       --range ${NODE_IP_RANGE} \
       --secondary-range "pods-default=${CLUSTER_IP_RANGE}" \
       --secondary-range "services-default=${SERVICE_CLUSTER_IP_RANGE}"
@@ -2490,19 +2503,26 @@ function create-master() {
   fi
 
   KUBERNETES_MASTER_NAME="${MASTER_RESERVED_IP}"
-  MASTER_ADVERTISE_ADDRESS="${MASTER_RESERVED_IP}"
 
-  create-certs "${MASTER_RESERVED_IP}"
+  gcloud compute addresses create "${MASTER_NAME}-internal-ip" --project "${PROJECT}" --region $REGION --subnet $SUBNETWORK
+  MASTER_INTERNAL_IP=$(gcloud compute addresses describe "${MASTER_NAME}-internal-ip" --project "${PROJECT}" --region "${REGION}" -q --format='value(address)')
+  echo "Master internal ip is: $MASTER_INTERNAL_IP"
+
+  MASTER_ADVERTISE_ADDRESS="${MASTER_INTERNAL_IP}"
+
+  create-certs "${MASTER_RESERVED_IP}" "${MASTER_INTERNAL_IP}"
   create-etcd-certs ${MASTER_NAME}
   create-etcd-apiserver-certs "etcd-${MASTER_NAME}" ${MASTER_NAME}
 
   if [[ "$(get-num-nodes)" -ge "50" ]]; then
     # We block on master creation for large clusters to avoid doing too much
     # unnecessary work in case master start-up fails (like creation of nodes).
-    create-master-instance "${MASTER_RESERVED_IP}"
+    create-master-instance "${MASTER_RESERVED_IP}" "${MASTER_INTERNAL_IP}"
   else
-    create-master-instance "${MASTER_RESERVED_IP}" &
+    create-master-instance "${MASTER_RESERVED_IP}" "${MASTER_INTERNAL_IP}" &
   fi
+
+  KUBERNETES_MASTER_NAME="${MASTER_INTERNAL_IP}"
 }
 
 # Adds master replica to etcd cluster.
@@ -3209,6 +3229,7 @@ function kube-down() {
     if [[ "${KUBE_DELETE_NETWORK}" == "true" ]]; then
       # Delete all remaining firewall rules in the network.
       delete-all-firewall-rules || true
+      gcloud compute addresses delete --quiet "${MASTER_NAME}-internal-ip" --project "${PROJECT}" --region "${REGION}" || true
       delete-subnetworks || true
       delete-network || true  # might fail if there are leaked resources that reference the network
     fi
