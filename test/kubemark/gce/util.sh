@@ -44,6 +44,19 @@ function get-or-create-master-ip {
     MASTER_IP=$(gcloud compute addresses describe "${MASTER_NAME}-ip" \
     --project "${PROJECT}" --region "${REGION}" -q --format='value(address)')
   fi
+
+  if [[ -z "${MASTER_INTERNAL_IP:-}" ]]; then
+    run-gcloud-compute-with-retries addresses create "${MASTER_NAME}-internal-ip" \
+    --project "${PROJECT}" \
+    --subnet $SUBNETWORK \
+    --region "${REGION}" -q
+
+    MASTER_INTERNAL_IP=$(gcloud compute addresses describe "${MASTER_NAME}-internal-ip" \
+    --project "${PROJECT}" --region "${REGION}" -q --format='value(address)')
+  fi
+
+  MASTER_EXTERNAL_IP=${MASTER_IP}
+  MASTER_IP=${MASTER_INTERNAL_IP}
 }
 
 function create-master-instance-with-resources {
@@ -73,7 +86,8 @@ function create-master-instance-with-resources {
 
   run-gcloud-compute-with-retries instances create "${MASTER_NAME}" \
     "${GCLOUD_COMMON_ARGS[@]}" \
-    --address "${MASTER_IP}" \
+    --address "${MASTER_EXTERNAL_IP}" \
+    --private-network-ip "${MASTER_INTERNAL_IP}" \
     --machine-type "${MASTER_SIZE}" \
     --image-project="${MASTER_IMAGE_PROJECT}" \
     --image "${MASTER_IMAGE}" \
@@ -131,6 +145,11 @@ function delete-master-instance-and-resources {
       --project "${PROJECT}" \
       --region "${REGION}" \
       --quiet || true
+
+  gcloud compute addresses delete "${MASTER_NAME}-internal-ip" \
+    --project "${PROJECT}" \
+    --region "${REGION}" \
+    --quiet || true
 
   gcloud compute firewall-rules delete "${MASTER_NAME}-https" \
 	  --project "${PROJECT}" \

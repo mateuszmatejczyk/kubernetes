@@ -99,7 +99,7 @@ function generate-pki-config {
   kube::util::ensure-temp-dir
   gen-kube-bearertoken
   gen-kube-basicauth
-  create-certs "${MASTER_IP}"
+  create-certs "${MASTER_EXTERNAL_IP}" "${MASTER_INTERNAL_IP}"
   KUBELET_TOKEN=$(dd if=/dev/urandom bs=128 count=1 2>/dev/null | base64 | tr -d "=+/" | dd bs=32 count=1 2>/dev/null)
   KUBE_PROXY_TOKEN=$(dd if=/dev/urandom bs=128 count=1 2>/dev/null | base64 | tr -d "=+/" | dd bs=32 count=1 2>/dev/null)
   NODE_PROBLEM_DETECTOR_TOKEN=$(dd if=/dev/urandom bs=128 count=1 2>/dev/null | base64 | tr -d "=+/" | dd bs=32 count=1 2>/dev/null)
@@ -157,7 +157,7 @@ clusters:
 - name: kubemark
   cluster:
     certificate-authority-data: "${CA_CERT_BASE64}"
-    server: https://${MASTER_IP}
+    server: https://${MASTER_EXTERNAL_IP}
 contexts:
 - context:
     cluster: kubemark
@@ -170,6 +170,8 @@ EOF
 
 # Copy all the necessary resource files (scripts/configs/manifests) to the master.
 function copy-resource-files-to-master {
+  echo "MASTER NAME IS: ${MASTER_NAME}"
+
   copy-files \
     "${SERVER_BINARY_TAR}" \
     "${RESOURCE_DIRECTORY}/kubemark-master-env.sh" \
@@ -499,6 +501,6 @@ start-hollow-nodes &
 
 wait
 echo ""
-echo "Master IP: ${MASTER_IP}"
+echo "Master IP: ${MASTER_EXTERNAL_IP}"
 echo "Password to kubemark master: ${KUBE_PASSWORD}"
 echo "Kubeconfig for kubemark master is written in ${LOCAL_KUBECONFIG}"
