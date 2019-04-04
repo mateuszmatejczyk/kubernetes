@@ -1890,8 +1890,11 @@ function make-gcloud-network-argument() {
   if [[ "${enable_ip_alias}" == 'true' ]]; then
     ret="--network-interface"
     ret="${ret} network=${networkURL}"
-    # If address is omitted, instance will not receive an external IP.
-    ret="${ret},address=${address:-}"
+    if [[ "$address" == "no-address" ]]; then
+      ret="${ret},no-address"
+    else
+      ret="${ret},address=${address:-}"
+    fi
     ret="${ret},subnet=${subnetURL}"
     ret="${ret},aliases=pods-default:${alias_size}"
     ret="${ret} --no-can-ip-forward"
@@ -2008,15 +2011,16 @@ function create-node-template() {
     fi
   fi
 
-
+  # TODO(mm4tt): no-address should be flag/env gated.
   local network=$(make-gcloud-network-argument \
     "${NETWORK_PROJECT}" \
     "${REGION}" \
     "${NETWORK}" \
     "${SUBNETWORK:-}" \
-    "" \
+    "no-address" \
     "${ENABLE_IP_ALIASES:-}" \
     "${IP_ALIAS_SIZE:-}")
+    echo "Node Network Flags: $network" >&2
 
   local node_image_flags=""
   if [[ "${os}" == 'linux' ]]; then
@@ -2111,6 +2115,8 @@ function kube-up() {
     create-network
     create-subnetworks
     detect-subnetworks
+    # TODO(mm4tt): This should be flag-gated
+    enable-cloud-nat
     write-cluster-location
     write-cluster-name
     create-autoscaler-config
@@ -2122,6 +2128,26 @@ function kube-up() {
     create-linux-nodes
     check-cluster
   fi
+}
+
+# Sets up Cloud NAT for the network.
+# Assumed vars:
+#   PROJECT
+#   REGION
+#   NETWORK
+function enable-cloud-nat() {
+  echo "Enabling Cloud NAT..."
+  gcloud compute routers create nat-router \
+    --project $PROJECT \
+    --region $REGION \
+    --network $NETWORK
+  gcloud compute routers nats create nat-config \
+    --project $PROJECT \
+    --router-region $REGION \
+    --router nat-router \
+    --nat-all-subnet-ip-ranges \
+    --auto-allocate-nat-external-ips
+  echo "Cloud NAT enabled!"
 }
 
 function check-existing() {
@@ -3210,6 +3236,7 @@ function kube-down() {
       # Delete all remaining firewall rules in the network.
       delete-all-firewall-rules || true
       delete-subnetworks || true
+      gcloud compute routers delete nat-router --project $PROJECT --quiet --region $REGION || true
       delete-network || true  # might fail if there are leaked resources that reference the network
     fi
 
