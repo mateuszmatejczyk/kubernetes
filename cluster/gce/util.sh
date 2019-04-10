@@ -2118,7 +2118,7 @@ function kube-up() {
     create-nodes-firewall
     create-nodes-template
     # Windows nodes take longer to boot and setup so create them first.
-    create-windows-nodes
+    #create-windows-nodes
     create-linux-nodes
     check-cluster
   fi
@@ -2687,14 +2687,14 @@ function create-nodes-template() {
   local scope_flags=$(get-scope-flags)
 
   write-linux-node-env
-  write-windows-node-env
+  #write-windows-node-env
 
   # NOTE: these template names and their format must match
   # create-[linux,windows]-nodes() as well as get-template()!
   local linux_template_name="${NODE_INSTANCE_PREFIX}-template"
   local windows_template_name="${WINDOWS_NODE_INSTANCE_PREFIX}-template"
   create-linux-node-instance-template $linux_template_name
-  create-windows-node-instance-template $windows_template_name "${scope_flags[*]}"
+  #create-windows-node-instance-template $windows_template_name "${scope_flags[*]}"
 }
 
 # Assumes:
