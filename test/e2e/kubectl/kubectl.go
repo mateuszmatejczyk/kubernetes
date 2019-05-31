@@ -199,7 +199,7 @@ var _ = SIGDescribe("Kubectl client", func() {
 	// Reusable cluster state function.  This won't be adversely affected by lazy initialization of framework.
 	clusterState := func() *framework.ClusterVerification {
 		return f.NewClusterVerification(
-			f.Namespace,
+			f. ,
 			framework.PodStateVerification{
 				Selectors:   map[string]string{"app": "redis"},
 				ValidPhases: []v1.PodPhase{v1.PodRunning /*v1.PodPending*/},
