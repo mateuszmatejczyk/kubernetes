@@ -143,7 +143,7 @@ func runKubectlRetryOrDie(args ...string) string {
 }
 
 // duplicated setup to avoid polluting "normal" clients with alpha features which confuses the generated clients
-var _ = SIGDescribe("Kubectl alpha client", func() {
+var _ = SIGDescribe("Kubectl alpha client [mm4tt]", func() {
 	defer ginkgo.GinkgoRecover()
 	f := framework.NewDefaultFramework("kubectl")
 
@@ -192,14 +192,14 @@ var _ = SIGDescribe("Kubectl alpha client", func() {
 	})
 })
 
-var _ = SIGDescribe("Kubectl client", func() {
+var _ = SIGDescribe("Kubectl client [mm4tt]", func() {
 	defer ginkgo.GinkgoRecover()
 	f := framework.NewDefaultFramework("kubectl")
 
 	// Reusable cluster state function.  This won't be adversely affected by lazy initialization of framework.
 	clusterState := func() *framework.ClusterVerification {
 		return f.NewClusterVerification(
-			f. ,
+			f.Namespace,
 			framework.PodStateVerification{
 				Selectors:   map[string]string{"app": "redis"},
 				ValidPhases: []v1.PodPhase{v1.PodRunning /*v1.PodPending*/},

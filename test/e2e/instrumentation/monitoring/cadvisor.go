@@ -35,7 +35,7 @@ var cadvisor struct {
 }
 var _ = config.AddOptions(&cadvisor, "instrumentation.monitoring.cadvisor")
 
-var _ = instrumentation.SIGDescribe("Cadvisor", func() {
+var _ = instrumentation.SIGDescribe("Cadvisor [mm4tt]", func() {
 
 	f := framework.NewDefaultFramework("cadvisor")
 
