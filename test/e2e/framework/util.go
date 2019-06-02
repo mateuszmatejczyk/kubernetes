@@ -683,8 +683,10 @@ func WaitForPodsRunningReady(c clientset.Interface, ns string, minPods, allowedN
 		if err != nil {
 			Logf("Error getting pods in namespace '%s': %v", ns, err)
 			if testutils.IsRetryableAPIError(err) {
+				Logf("It's a retryable error")
 				return false, nil
 			}
+			Logf("It's not a retryable error")
 			return false, err
 		}
 		nOk := int32(0)
@@ -2146,6 +2148,7 @@ func LoadClientset() (*clientset.Clientset, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error creating client: %v", err.Error())
 	}
+	config.Timeout = 3 * time.Minute
 	return clientset.NewForConfig(config)
 }
 
