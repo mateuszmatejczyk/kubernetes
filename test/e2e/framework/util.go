@@ -683,7 +683,10 @@ func WaitForPodsRunningReady(c clientset.Interface, ns string, minPods, allowedN
 		if err != nil {
 			Logf("Error getting pods in namespace '%s': %v", ns, err)
 			if testutils.IsRetryableAPIError(err) {
-				Logf("It's a retryable error")
+				Logf("It's a retryable api error")
+				return false, nil
+			} else if IsRetryableNetError(err) {
+				Logf("It's a retryable net error")
 				return false, nil
 			}
 			Logf("It's not a retryable error")
@@ -735,6 +738,14 @@ func WaitForPodsRunningReady(c clientset.Interface, ns string, minPods, allowedN
 		Logf("Number of not-ready pods (%d) is below the allowed threshold (%d).", notReady, allowedNotReadyPods)
 	}
 	return nil
+}
+
+// IsRetryableNetError determines whether the error is a retryable net error.
+func IsRetryableNetError(err error) bool {
+	if netError, ok := err.(net.Error); ok {
+		return netError.Temporary() || netError.Timeout()
+	}
+	return false
 }
 
 // WaitForDaemonSets for all daemonsets in the given namespace to be ready
