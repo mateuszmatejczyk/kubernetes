@@ -2159,7 +2159,7 @@ func LoadClientset() (*clientset.Clientset, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error creating client: %v", err.Error())
 	}
-	//config.Timeout = 10 * time.Minute
+	config.Timeout = 10 * time.Minute
 	return clientset.NewForConfig(config)
 }
 

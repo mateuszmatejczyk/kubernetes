@@ -92,16 +92,15 @@ func NodeSSHHosts(c clientset.Interface) ([]string, error) {
 	// either all have ExternalIP or none will. Simplifies handling here and
 	// should be adequate since the setting of the external IPs is provider
 	// specific: they should either all have them or none of them will.
-	if len(hosts) == 0 {
-		Logf("No external IP address on nodes, falling back to internal IPs")
+	if len(hosts) < len(nodelist.Items) {
+		Logf("No external IP address on all nodes, falling back to internal IPs")
 		hosts = NodeAddresses(nodelist, v1.NodeInternalIP)
 	}
 
 	// Error if any node didn't have an external/internal IP.
 	if len(hosts) != len(nodelist.Items) {
 		return hosts, fmt.Errorf(
-			"only found %d IPs on nodes, but found %d nodes. Nodelist: %v",
-			len(hosts), len(nodelist.Items), nodelist)
+			"only found %d IPs on nodes, but found %d nodes.", len(hosts), len(nodelist.Items))
 	}
 
 	sshHosts := make([]string, 0, len(hosts))
