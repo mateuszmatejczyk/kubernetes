@@ -27,6 +27,7 @@ unset CDPATH
 # As individual scripts (like hack/update-vendor.sh) make use of go modules,
 # they can explicitly set GO111MODULE=on
 export GO111MODULE=auto
+export GOFLAGS=-mod=vendor
 
 # The root of the build/dist directory
 KUBE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"

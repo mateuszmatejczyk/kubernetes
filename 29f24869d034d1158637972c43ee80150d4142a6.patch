@@ -1,0 +1,36 @@
+From 29f24869d034d1158637972c43ee80150d4142a6 Mon Sep 17 00:00:00 2001
+From: Jordan Liggitt <liggitt@google.com>
+Date: Wed, 12 Jun 2019 15:40:49 -0400
+Subject: [PATCH] TMP: hack boilerplate search to also look under vendor dir
+
+---
+ vendor/k8s.io/gengo/args/args.go | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/vendor/k8s.io/gengo/args/args.go b/vendor/k8s.io/gengo/args/args.go
+index 2f8680d1e0fc6..272e1545aed8a 100644
+--- a/vendor/k8s.io/gengo/args/args.go
++++ b/vendor/k8s.io/gengo/args/args.go
+@@ -25,6 +25,7 @@ import (
+ 	"os"
+ 	"path"
+ 	"path/filepath"
++	"regexp"
+ 	"strconv"
+ 	"strings"
+ 	"time"
+@@ -107,7 +108,13 @@ func (g *GeneratorArgs) AddFlags(fs *pflag.FlagSet) {
+ func (g *GeneratorArgs) LoadGoBoilerplate() ([]byte, error) {
+ 	b, err := ioutil.ReadFile(g.GoHeaderFilePath)
+ 	if err != nil {
+-		return nil, err
++		// FIXME: tmp hack to also look under vendor dir
++		re := regexp.MustCompile(`(_output/.*?/go/src)`)
++		if b2, err2 := ioutil.ReadFile(re.ReplaceAllString(g.GoHeaderFilePath, "$1/k8s.io/kubernetes/vendor")); err2 != nil {
++			return nil, err2
++		} else {
++			b = b2
++		}
+ 	}
+ 	b = bytes.Replace(b, []byte("YEAR"), []byte(strconv.Itoa(time.Now().Year())), -1)
+ 

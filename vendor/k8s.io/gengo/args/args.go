@@ -25,6 +25,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -107,7 +108,13 @@ func (g *GeneratorArgs) AddFlags(fs *pflag.FlagSet) {
 func (g *GeneratorArgs) LoadGoBoilerplate() ([]byte, error) {
 	b, err := ioutil.ReadFile(g.GoHeaderFilePath)
 	if err != nil {
-		return nil, err
+		// FIXME: tmp hack to also look under vendor dir
+		re := regexp.MustCompile(`(_output/.*?/go/src)`)
+		if b2, err2 := ioutil.ReadFile(re.ReplaceAllString(g.GoHeaderFilePath, "$1/k8s.io/kubernetes/vendor")); err2 != nil {
+			return nil, err2
+		} else {
+			b = b2
+		}
 	}
 	b = bytes.Replace(b, []byte("YEAR"), []byte(strconv.Itoa(time.Now().Year())), -1)
 

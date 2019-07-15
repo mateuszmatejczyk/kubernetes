@@ -1,0 +1,21 @@
+From e2952e3ba9dc4218a1da6725ce8cee121c16d8c4 Mon Sep 17 00:00:00 2001
+From: Jordan Liggitt <liggitt@google.com>
+Date: Wed, 12 Jun 2019 13:52:50 -0400
+Subject: [PATCH] opt into vendor mode for modules
+
+---
+ hack/lib/init.sh | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/hack/lib/init.sh b/hack/lib/init.sh
+index 46b69836efa63..08376f4ef55b5 100755
+--- a/hack/lib/init.sh
++++ b/hack/lib/init.sh
+@@ -27,6 +27,7 @@ unset CDPATH
+ # As individual scripts (like hack/update-vendor.sh) make use of go modules,
+ # they can explicitly set GO111MODULE=on
+ export GO111MODULE=auto
++export GOFLAGS=-mod=vendor
+ 
+ # The root of the build/dist directory
+ KUBE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"

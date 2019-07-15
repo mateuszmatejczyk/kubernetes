@@ -1,0 +1,97 @@
+From 5ab2ee9922bd09d2b99c9afee94e2157bf085910 Mon Sep 17 00:00:00 2001
+From: Jordan Liggitt <liggitt@google.com>
+Date: Wed, 12 Jun 2019 15:37:37 -0400
+Subject: [PATCH] Fix makefile targets to avoid relative ./vendor/... builds
+
+---
+ build/root/Makefile.generated_files | 10 +++++-----
+ hack/lib/golang.sh                  |  8 ++++----
+ 2 files changed, 9 insertions(+), 9 deletions(-)
+
+diff --git a/build/root/Makefile.generated_files b/build/root/Makefile.generated_files
+index 4892325569df4..6777075275996 100644
+--- a/build/root/Makefile.generated_files
++++ b/build/root/Makefile.generated_files
+@@ -197,7 +197,7 @@ $(DEEPCOPY_FILES): $(DEEPCOPY_GEN)
+ # newer than the binary, and try to "rebuild" it over and over.  So we touch
+ # it, and make is happy.
+ $(DEEPCOPY_GEN): $(k8s.io/kubernetes/vendor/k8s.io/code-generator/cmd/deepcopy-gen)
+-	KUBE_BUILD_PLATFORMS="" hack/make-rules/build.sh ./vendor/k8s.io/code-generator/cmd/deepcopy-gen
++	KUBE_BUILD_PLATFORMS="" hack/make-rules/build.sh k8s.io/code-generator/cmd/deepcopy-gen
+ 	touch $@
+ 
+ 
+@@ -291,7 +291,7 @@ $(DEFAULTER_FILES): $(DEFAULTER_GEN)
+ # newer than the binary, and try to "rebuild" it over and over.  So we touch
+ # it, and make is happy.
+ $(DEFAULTER_GEN): $(k8s.io/kubernetes/vendor/k8s.io/code-generator/cmd/defaulter-gen)
+-	KUBE_BUILD_PLATFORMS="" hack/make-rules/build.sh ./vendor/k8s.io/code-generator/cmd/defaulter-gen
++	KUBE_BUILD_PLATFORMS="" hack/make-rules/build.sh k8s.io/code-generator/cmd/defaulter-gen
+ 	touch $@
+ 
+ 
+@@ -395,7 +395,7 @@ $(CONVERSION_FILES): $(CONVERSION_GEN)
+ # newer than the binary, and try to rebuild it over and over.  So we touch it,
+ # and make is happy.
+ $(CONVERSION_GEN): $(k8s.io/kubernetes/vendor/k8s.io/code-generator/cmd/conversion-gen)
+-	KUBE_BUILD_PLATFORMS="" hack/make-rules/build.sh ./vendor/k8s.io/code-generator/cmd/conversion-gen
++	KUBE_BUILD_PLATFORMS="" hack/make-rules/build.sh k8s.io/code-generator/cmd/conversion-gen
+ 	touch $@
+ 
+ 
+@@ -494,7 +494,7 @@ $(CRD_OPENAPI_OUTFILE): $(OPENAPI_GEN)
+ # newer than the binary, and try to "rebuild" it over and over.  So we touch
+ # it, and make is happy.
+ $(OPENAPI_GEN): $(k8s.io/kubernetes/vendor/k8s.io/kube-openapi/cmd/openapi-gen)
+-	KUBE_BUILD_PLATFORMS="" hack/make-rules/build.sh ./vendor/k8s.io/kube-openapi/cmd/openapi-gen
++	KUBE_BUILD_PLATFORMS="" hack/make-rules/build.sh k8s.io/kube-openapi/cmd/openapi-gen
+ 	touch $@
+ 
+ 
+@@ -523,5 +523,5 @@ gen_bindata: $(BINDATA_GEN) FORCE
+ # newer than the binary, and try to rebuild it over and over.  So we touch it,
+ # and make is happy.
+ $(BINDATA_GEN): $(k8s.io/kubernetes/vendor/github.com/go-bindata/go-bindata/go-bindata)
+-	KUBE_BUILD_PLATFORMS="" hack/make-rules/build.sh ./vendor/github.com/go-bindata/go-bindata/go-bindata
++	KUBE_BUILD_PLATFORMS="" hack/make-rules/build.sh github.com/go-bindata/go-bindata/go-bindata
+ 	touch $@
+diff --git a/hack/lib/golang.sh b/hack/lib/golang.sh
+index e9c3b06692572..fc1e7179d46c0 100755
+--- a/hack/lib/golang.sh
++++ b/hack/lib/golang.sh
+@@ -76,7 +76,7 @@ kube::golang::server_targets() {
+     cmd/kubeadm
+     cmd/hyperkube
+     cmd/kube-scheduler
+-    vendor/k8s.io/apiextensions-apiserver
++    k8s.io/apiextensions-apiserver
+     cluster/gce/gci/mounter
+   )
+   echo "${targets[@]}"
+@@ -107,7 +107,7 @@ readonly KUBE_SERVER_IMAGE_BINARIES=("${KUBE_SERVER_IMAGE_TARGETS[@]##*/}")
+ kube::golang::conformance_image_targets() {
+   # NOTE: this contains cmd targets for kube::release::build_conformance_image
+   local targets=(
+-    vendor/github.com/onsi/ginkgo/ginkgo
++    github.com/onsi/ginkgo/ginkgo
+     test/e2e/e2e.test
+     cmd/kubectl
+   )
+@@ -262,7 +262,7 @@ kube::golang::test_targets() {
+     cmd/genyaml
+     cmd/genswaggertypedocs
+     cmd/linkcheck
+-    vendor/github.com/onsi/ginkgo/ginkgo
++    github.com/onsi/ginkgo/ginkgo
+     test/e2e/e2e.test
+   )
+   echo "${targets[@]}"
+@@ -289,7 +289,7 @@ readonly KUBE_TEST_PORTABLE=(
+ kube::golang::server_test_targets() {
+   local targets=(
+     cmd/kubemark
+-    vendor/github.com/onsi/ginkgo/ginkgo
++    github.com/onsi/ginkgo/ginkgo
+   )
+ 
+   if [[ "${OSTYPE:-}" == "linux"* ]]; then
