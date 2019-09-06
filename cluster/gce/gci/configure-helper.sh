@@ -1835,6 +1835,12 @@ function start-kube-apiserver {
     fi
     container_env+="{\"name\": \"KUBE_PATCH_CONVERSION_DETECTOR\", \"value\": \"${ENABLE_PATCH_CONVERSION_DETECTOR}\"}"
   fi
+
+  if [[ -n "${container_env}" ]]; then
+      container_env="${container_env}, "
+  fi
+  container_env+="{\"name\": \"GODEBUG\", \"value\": \"gctrace=1\"}"
+
   if [[ -n "${container_env}" ]]; then
     container_env="\"env\":[${container_env}],"
   fi
