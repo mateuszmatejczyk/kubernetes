@@ -2751,16 +2751,22 @@ function create-master() {
 # $1: etcd client port
 # $2: etcd internal port
 # returns the result of ssh command which adds replica
-#### WARNING: THIS DOESN'T WORK IN CLUSTERS WITH MTLS ENABLED.
-# TODO(mborsz): Fix this
+# TODO(mm4tt): Clean up
 function add-replica-to-etcd() {
   local -r client_port="${1}"
   local -r internal_port="${2}"
+  local -r mtls_enabled="${3}"
+
+  local extra_args=""
+  if [[ "${mtls_enabled:-}" == "true" ]]; then
+    extra_args="--cacert /etc/srv/kubernetes/pki/etcd-apiserver-ca.crt --key /etc/srv/kubernetes/pki/etcd-apiserver-client.key --cert /etc/srv/kubernetes/pki/etcd-apiserver-client.crt  https://"
+  fi
+
   gcloud compute ssh "${EXISTING_MASTER_NAME}" \
     --project "${PROJECT}" \
     --zone "${EXISTING_MASTER_ZONE}" \
     --command \
-      "curl localhost:${client_port}/v2/members -XPOST -H \"Content-Type: application/json\" -d '{\"peerURLs\":[\"https://${REPLICA_NAME}:${internal_port}\"]}' -s"
+      "curl ${extra_args}127.0.0.1:${client_port}/v3/cluster/member/add -XPOST -H \"Content-Type: application/json\" -d '{\"peerURLs\":[\"https://${REPLICA_NAME}:${internal_port}\"]}' -s"
   return $?
 }
 
@@ -2786,11 +2792,11 @@ function replicate-master() {
   echo "Experimental: replicating existing master ${EXISTING_MASTER_ZONE}/${EXISTING_MASTER_NAME} as ${ZONE}/${REPLICA_NAME}"
 
   # Before we do anything else, we should configure etcd to expect more replicas.
-  if ! add-replica-to-etcd 2379 2380; then
+  if ! add-replica-to-etcd 2379 2380 true; then
     echo "Failed to add master replica to etcd cluster."
     return 1
   fi
-  if ! add-replica-to-etcd 4002 2381; then
+  if ! add-replica-to-etcd 4002 2381 false; then
     echo "Failed to add master replica to etcd events cluster."
     return 1
   fi
@@ -3372,8 +3378,7 @@ function check-cluster() {
 #
 # $1: etcd client port
 # returns the result of ssh command which removes replica
-#### WARNING: THIS DOESN'T WORK IN CLUSTERS WITH MTLS ENABLED.
-# TODO(mborsz): Fix this
+# TODO(mm4tt): Fix this
 function remove-replica-from-etcd() {
   local -r port="${1}"
   [[ -n "${EXISTING_MASTER_NAME}" ]] || return
@@ -3381,7 +3386,7 @@ function remove-replica-from-etcd() {
     --project "${PROJECT}" \
     --zone "${EXISTING_MASTER_ZONE}" \
     --command \
-    "curl -s localhost:${port}/v2/members/\$(curl -s localhost:${port}/v2/members -XGET | sed 's/{\\\"id/\n/g' | grep ${REPLICA_NAME}\\\" | cut -f 3 -d \\\") -XDELETE -L 2>/dev/null"
+    "curl -s 127.0.0.1:${port}/v2/members/\$(curl -s 127.0.0.1:${port}/v2/members -XGET | sed 's/{\\\"id/\n/g' | grep ${REPLICA_NAME}\\\" | cut -f 3 -d \\\") -XDELETE -L 2>/dev/null"
   local -r res=$?
   echo "Removing etcd replica, name: ${REPLICA_NAME}, port: ${port}, result: ${res}"
   return "${res}"
