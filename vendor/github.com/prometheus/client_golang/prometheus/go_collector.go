@@ -317,7 +317,7 @@ func (c *goCollector) Collect(ch chan<- Metric) {
 	ch <- MustNewConstMetric(c.threadsDesc, GaugeValue, float64(n))
 
 	var stats debug.GCStats
-	stats.PauseQuantiles = make([]time.Duration, 5)
+	stats.PauseQuantiles = make([]time.Duration, 101)
 	debug.ReadGCStats(&stats)
 
 	quantiles := make(map[float64]float64)
