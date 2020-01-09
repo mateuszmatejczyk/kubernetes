@@ -15,21 +15,7 @@
 # This file creates a standard build environment for building cross
 # platform go binary for the architecture kubernetes cares about.
 
-FROM buildpack-deps:stretch-scm
-
-# Instead of building Go, use the previously build custom version.
-# The following assumes that $GOROOT was moved to Dockerfile directory.
-COPY go /usr/local/go
-RUN chmod -R a+rx /usr/local/go
-
-RUN export PATH="/usr/local/go/bin:$PATH"; go version
-
-ENV GOPATH /go
-ENV PATH $GOPATH/bin:/usr/local/go/bin:$PATH
-
-RUN mkdir -p "$GOPATH/src" "$GOPATH/bin" && chmod -R 777 "$GOPATH"
-WORKDIR $GOPATH
-
+FROM golang:1.14beta1
 
 ENV GOARM 7
 ENV KUBE_DYNAMIC_CROSSPLATFORMS \
