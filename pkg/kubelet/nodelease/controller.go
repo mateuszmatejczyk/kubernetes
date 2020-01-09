@@ -90,7 +90,8 @@ func (c *controller) Run(stopCh <-chan struct{}) {
 }
 
 func (c *controller) sync() {
-	if c.latestLease != nil {
+	// DO NOT SUBMIT: I disable this part for experimenal purposes.
+	if false && c.latestLease != nil {
 		// As long as node lease is not (or very rarely) updated by any other agent than Kubelet,
 		// we can optimistically assume it didn't change since our last update and try updating
 		// based on the version from that time. Thanks to it we avoid GET call and reduce load
