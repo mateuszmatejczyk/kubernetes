@@ -448,7 +448,7 @@ function kube::build::docker_build() {
   local -r image=$1
   local -r context_dir=$2
   local -r pull="${3:-true}"
-  local -ra build_cmd=("${DOCKER[@]}" build -t "${image}" "--pull=${pull}" "${context_dir}")
+  local -ra build_cmd=("${DOCKER[@]}" build --ulimit memlock=-1 -t "${image}" "--pull=${pull}" "${context_dir}")
 
   kube::log::status "Building Docker image ${image}"
   local docker_output
@@ -537,6 +537,7 @@ function kube::build::run_build_command_ex() {
     "--name=${container_name}"
     "--user=$(id -u):$(id -g)"
     "--hostname=${HOSTNAME}"
+    "--ulimit=memlock=-1"
     "${DOCKER_MOUNT_ARGS[@]}"
   )
 

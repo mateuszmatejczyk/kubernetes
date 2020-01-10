@@ -22,7 +22,7 @@ TAG=$(shell cat VERSION)
 all: push
 
 build:
-	docker build --pull -t $(IMAGE):$(TAG) .
+	docker build --pull -t $(IMAGE):$(TAG) --ulimit memlock=-1 .
 
 push: build
 	docker push $(IMAGE):$(TAG)
