@@ -2299,7 +2299,7 @@ function kube-up() {
     create-subnetworks
     detect-subnetworks
     # Windows nodes take longer to boot and setup so create them first.
-    create-windows-nodes
+    #create-windows-nodes
     create-linux-nodes
   elif [[ ${KUBE_REPLICATE_EXISTING_MASTER:-} == "true" ]]; then
     detect-master
@@ -2330,7 +2330,7 @@ function kube-up() {
     create-nodes-template
     if [[ "${KUBE_CREATE_NODES}" == "true" ]]; then
       # Windows nodes take longer to boot and setup so create them first.
-      create-windows-nodes
+      #create-windows-nodes
       create-linux-nodes
     fi
     check-cluster
@@ -3102,7 +3102,7 @@ function create-nodes-template() {
   local linux_template_name="${NODE_INSTANCE_PREFIX}-template"
   local windows_template_name="${WINDOWS_NODE_INSTANCE_PREFIX}-template"
   create-linux-node-instance-template $linux_template_name
-  create-windows-node-instance-template $windows_template_name "${scope_flags[*]}"
+  #create-windows-node-instance-template $windows_template_name "${scope_flags[*]}"
   if [[ -n "${ADDITIONAL_MACHINE_TYPE:-}" ]]; then
     local linux_extra_template_name="${NODE_INSTANCE_PREFIX}-extra-template"
     create-linux-node-instance-template $linux_extra_template_name "${ADDITIONAL_MACHINE_TYPE}"
