@@ -3182,7 +3182,7 @@ function create-linux-nodes() {
     this_mig_size=$((${instances_left} / (${NUM_MIGS}-${i}+1)))
     instances_left=$((instances_left-${this_mig_size}))
 
-    # Run instance-groups creation in parallel.
+    # Run instance-groups creation in serial!
     {
       gcloud compute instance-groups managed \
           create "${group_name}" \
@@ -3196,9 +3196,9 @@ function create-linux-nodes() {
           --zone "${ZONE}" \
           --project "${PROJECT}" \
           --timeout "${MIG_WAIT_UNTIL_STABLE_TIMEOUT}" || true
-    } &
+    } #&
   done
-  wait
+  #wait
 }
 
 # Assumes:
