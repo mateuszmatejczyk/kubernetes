@@ -689,7 +689,7 @@ func waitForApiserverUp(c clientset.Interface) error {
 	return fmt.Errorf("waiting for apiserver timed out")
 }
 
-var _ = SIGDescribe("Services", func() {
+var _ = SIGDescribe("Services [mm4tt]", func() {
 	f := framework.NewDefaultFramework("services")
 
 	var cs clientset.Interface
